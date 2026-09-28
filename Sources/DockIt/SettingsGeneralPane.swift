@@ -126,7 +126,9 @@ struct GeneralPane: View {
             ) {
                 SettingsToggle(
                     title: "Sync settings with iCloud",
-                    subtitle: "Size, magnification, hover, pinned apps, stacks and hidden apps.",
+                    // A failed write says so here; it used to reach only the log.
+                    subtitle: SettingsSync.current?.lastError.map { "Last sync failed: \($0)" }
+                        ?? "Size, magnification, hover, pinned apps, stacks and hidden apps.",
                     isOn: $settings.syncsWithICloud)
                     .disabled(!SettingsSync.isAvailable)
             }

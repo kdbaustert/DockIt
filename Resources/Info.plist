@@ -44,7 +44,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>DockIt asks Finder to empty the Trash.</string>
+	<string>DockIt asks Finder to empty the Trash, and Spotify or Music what is playing for the Now Playing widget.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

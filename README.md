@@ -32,7 +32,7 @@ sight.
 - **Multiple displays:** follow the pointer, stay on the primary display, pick one, or show a dock
   on every display.
 - **Appearance:** bottom, left or right edge, icon size, bar tint, corner radius, icon shadows and
-  running-app dots.
+  running-app dots. When the dock fills its edge, the icons shrink to fit, as in the macOS Dock.
 - **Settings sync** through iCloud Drive, plus import and export.
 - **Automatic updates** through Sparkle.
 - **VoiceOver.** Every icon, minimized window and widget is labelled and can be pressed, and the

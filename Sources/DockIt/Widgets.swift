@@ -23,6 +23,9 @@ final class WidgetsModel {
     private(set) var trackArtist = ""
     private(set) var isPlaying = false
     private(set) var artwork: NSImage?
+    /// A running player DockIt is not allowed to ask, when no other answered. Denied looked exactly
+    /// like nothing playing, which left no clue that a permission was the reason.
+    private(set) var deniedPlayer: String?
     /// Which player answered last — where the controls go.
     private var player: String?
     @ObservationIgnored private var artworkURL: String?
@@ -65,6 +68,19 @@ final class WidgetsModel {
         } onChange: { [weak self] in
             self?.configurePlayer()
         }
+        // The minute timer runs on a clock that stops during sleep, so after a wake it showed the
+        // time the Mac went to sleep until it next fired — and then fired off the minute. A clock
+        // or time zone change is the same problem without the sleep.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.configureClock() }
+        }
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.configureClock() }
+            }
+        }
         configureClock()
         configureWeather()
         configurePlayer()
@@ -104,7 +120,11 @@ final class WidgetsModel {
         weatherRetry?.cancel()
         weatherRetry = nil
         guard settings.showsWeather, !settings.weatherLocation.isEmpty else {
+            // All of the reading: the temperature alone left the old city and its high and low.
             weatherTemperature = nil
+            weatherPlace = ""
+            weatherHighLow = ""
+            weatherReadingLocation = nil
             return
         }
         refreshWeather()
@@ -280,6 +300,7 @@ final class WidgetsModel {
         guard settings.showsNowPlaying else {
             playerNotices = nil
             trackTitle = nil
+            deniedPlayer = nil
             clearArtwork()
             return
         }
@@ -306,6 +327,7 @@ final class WidgetsModel {
             // A playing player beats a paused one: Music left paused must not hide Spotify playing.
             // A paused one shows only when nothing plays, and the first playing one ends the search.
             var shown: (app: String, parts: [String])?
+            var denied: String?
             for app in apps {
                 // The timeout bounds each Apple event a busy player sits on; the process kill in
                 // runAppleScript backs it up should osascript hang anyway.
@@ -325,7 +347,12 @@ final class WidgetsModel {
                         end if
                     end timeout
                     """
-                guard let output = await Self.runAppleScript(script), !output.isEmpty else { continue }
+                let output: String
+                switch await Self.runAppleScript(script) {
+                case .output(let text) where !text.isEmpty: output = text
+                case .denied: denied = denied ?? app; continue
+                default: continue
+                }
                 let parts = output.components(separatedBy: Self.separator)
                 guard parts.count >= 3 else { continue }
                 if shown == nil || parts[0] == "playing" { shown = (app, parts) }
@@ -341,6 +368,7 @@ final class WidgetsModel {
             }
             // Switched off while the poll ran: configurePlayer has already cleared the tile.
             guard settings.showsNowPlaying else { return }
+            deniedPlayer = shown == nil ? denied : nil
             guard let shown else {
                 trackTitle = nil
                 clearArtwork()
@@ -393,16 +421,24 @@ final class WidgetsModel {
         }
     }
 
+    enum AppleScriptResult: Sendable {
+        case output(String)
+        /// Automation permission refused (-1743).
+        case denied
+        case failed
+    }
+
     /// osascript in a subprocess: NSAppleScript on the main thread can beachball on a busy player.
-    private nonisolated static func runAppleScript(_ source: String) async -> String? {
+    private nonisolated static func runAppleScript(_ source: String) async -> AppleScriptResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
                 process.arguments = ["-e", source]
                 let out = Pipe()
+                let err = Pipe()
                 process.standardOutput = out
-                process.standardError = FileHandle.nullDevice
+                process.standardError = err
                 // Killed if still running after 5 s: a player wedged past the script's own timeout
                 // would otherwise hold this thread, and the poll with it, indefinitely.
                 let kill = DispatchWorkItem {
@@ -414,16 +450,17 @@ final class WidgetsModel {
                     process.waitUntilExit()
                     kill.cancel()
                 } catch {
-                    continuation.resume(returning: nil)
+                    continuation.resume(returning: .failed)
                     return
                 }
                 guard process.terminationStatus == 0 else {
-                    continuation.resume(returning: nil)
+                    let message = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    continuation.resume(returning: message.contains("-1743") ? .denied : .failed)
                     return
                 }
                 let data = out.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines))
+                let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.resume(returning: .output(text ?? ""))
             }
         }
     }

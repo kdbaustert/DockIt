@@ -14,4 +14,6 @@ final class PanelState {
     /// Scales the magnification growth, 0...1. Stays 1 except while "magnify as the pointer
     /// approaches" is easing the bar up before the pointer has reached it.
     var gain: CGFloat = 1
+    /// The last layout and what it was built from; see `DockModel.layout(for:)`.
+    @ObservationIgnored var layoutCache: (key: DockModel.LayoutKey, layout: DockLayout)?
 }

@@ -63,6 +63,26 @@ final class DockModelTests: XCTestCase {
         XCTAssertEqual(DockModel.placed(alias, before: nil, in: [safari, mail]), [mail, alias])
     }
 
+    // MARK: - reordered (widgets)
+
+    func testWidgetMovesBeforeTarget() {
+        XCTAssertEqual(
+            DockModel.reordered(["nowPlaying", "weather", "clock"], moving: "clock", before: "nowPlaying"),
+            ["clock", "nowPlaying", "weather"])
+    }
+
+    func testWidgetWithNoTargetGoesLast() {
+        XCTAssertEqual(
+            DockModel.reordered(["nowPlaying", "weather", "clock"], moving: "nowPlaying", before: nil),
+            ["weather", "clock", "nowPlaying"])
+    }
+
+    /// A target that is not in the order — a stale drag — puts the widget last rather than losing it.
+    func testWidgetWithUnknownTargetGoesLast() {
+        XCTAssertEqual(
+            DockModel.reordered(["weather", "clock"], moving: "weather", before: "gone"), ["clock", "weather"])
+    }
+
     // MARK: - badges
 
     func testBadgesKeyedByItemID() {

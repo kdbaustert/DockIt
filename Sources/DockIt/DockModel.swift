@@ -87,6 +87,12 @@ final class DockModel {
     @ObservationIgnored private var maintenanceBeats = 0
     /// Whether the Accessibility prompt has been shown in this run.
     private static var hasPromptedForAccessibility = false
+    /// The minimized-window and badge sweeps, off the main thread: each app that does not answer
+    /// costs its 0.3 s timeout, and on the main thread that froze magnification and clicks with it.
+    /// Serial, so the two sweeps never ask at once.
+    private static let axQueue = DispatchQueue(label: "dev.kennyb.dockit.ax", qos: .utility)
+    @ObservationIgnored private var isSweepingMinimized = false
+    @ObservationIgnored private var isSweepingBadges = false
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -173,20 +179,44 @@ final class DockModel {
         )
     }
 
-    /// The bar's geometry for one screen's panel. The falloff carries the Reach setting and the
-    /// panel's approach gain, so the pure geometry stays free of both.
+    /// Everything a layout is built from, so an unchanged one is not built again.
+    struct LayoutKey: Equatable {
+        let items: [DockItem]
+        let metrics: DockMetrics
+        let stripLength: CGFloat
+        let pointer: CGFloat?
+        let gain: CGFloat
+        let reach: Double
+    }
+
+    /// The bar's geometry for one screen's panel, with the icons shrunk to fit that screen's edge.
+    /// The falloff carries the Reach setting and the panel's approach gain, so the pure geometry
+    /// stays free of both. Cached per panel: the pointer tick (up to 120 Hz) and the view's body both
+    /// ask for it, with the same inputs, for every pointer move — and each build is a handful of
+    /// arrays. Callers take the metrics from the result, since fitting can change the icon size.
     func layout(for state: PanelState) -> DockLayout {
         let reach = settings.magnifyReach
         let gain = state.gain
-        return DockLayout(
-            items: items.map { $0.spec(for: metrics) },
-            metrics: metrics,
+        let key = LayoutKey(
+            items: items, metrics: metrics, stripLength: state.stripLength, pointer: state.pointer,
+            gain: gain, reach: reach)
+        if let cached = state.layoutCache, cached.key == key { return cached.layout }
+        let items = self.items
+        // Some room at either end, as the macOS Dock leaves.
+        let fitted = DockLayout.fitted(metrics, available: state.stripLength - 16) { m in
+            items.map { $0.spec(for: m) }
+        }
+        let layout = DockLayout(
+            items: items.map { $0.spec(for: fitted) },
+            metrics: fitted,
             stripLength: state.stripLength,
             pointer: state.pointer,
             falloff: { distance, iconSize in
                 magnificationFalloff(distance: distance, iconSize: iconSize, reachIcons: reach) * gain
             }
         )
+        state.layoutCache = (key, layout)
+        return layout
     }
 
     // MARK: - Items
@@ -283,6 +313,10 @@ final class DockModel {
         }
 
         if result != items { items = result }
+        // Only what is on the bar: apps come and go all day, and an app with no bundle gets a new
+        // "pid:" key at every launch, so the cache otherwise only ever grew.
+        let onBar = Set(result.map(\.id))
+        icons = icons.filter { onBar.contains($0.key) }
     }
 
     /// Minimized is each app's own word for it: the windows it lists over Accessibility with
@@ -295,47 +329,61 @@ final class DockModel {
     ///
     /// `frontmostOnly` asks just the frontmost app and keeps what the last sweep found for the rest.
     private func refreshMinimizedWindows(frontmostOnly: Bool = false) {
-        guard settings.showsMinimizedWindows, AXIsProcessTrusted(), let getWindowID = WindowActions.getWindowIDFn
-        else {
+        guard settings.showsMinimizedWindows, AXIsProcessTrusted(), WindowActions.getWindowIDFn != nil else {
             if !minimizedWindows.isEmpty {
                 minimizedWindows = []
                 rebuild()
             }
             return
         }
+        // A sweep still waiting on a slow app: the next beat asks again.
+        guard !isSweepingMinimized else { return }
+        isSweepingMinimized = true
         let me = ProcessInfo.processInfo.processIdentifier
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        var found: [MinimizedWindow] = []
-        for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular && app.processIdentifier != me {
-            // Walked in running order either way, so a partial pass keeps the tiles where they were.
-            if frontmostOnly, app.processIdentifier != frontmost {
-                found += minimizedWindows.filter { $0.pid == app.processIdentifier }
-                continue
-            }
-            let element = AXUIElementCreateApplication(app.processIdentifier)
-            // As in restoreMinimizedWindow: on the main thread, a hung app must not stall the dock
-            // for the default six seconds.
-            AXUIElementSetMessagingTimeout(element, 0.3)
-            var value: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-                  let windows = value as? [AXUIElement]
-            else { continue }
-            for window in windows where Self.isMinimized(window) {
-                var id: CGWindowID = 0
-                guard getWindowID(window, &id) == .success, id != 0 else { continue }
-                // The AX title, which needs no Screen Recording, unlike the window server's.
-                let title = Self.string(of: window, kAXTitleAttribute) ?? ""
-                found.append(MinimizedWindow(id: id, pid: app.processIdentifier, title: title))
+        // Running order, so a partial pass keeps the tiles where they were.
+        let order = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.processIdentifier != me }
+            .map(\.processIdentifier)
+        let asked = frontmostOnly ? order.filter { $0 == frontmost } : order
+        Self.axQueue.async { [weak self] in
+            let answers = Dictionary(uniqueKeysWithValues: asked.map { ($0, Self.minimizedWindows(of: $0)) })
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.applyMinimizedWindows(order: order, answers: answers) }
             }
         }
+    }
+
+    /// One app's minimized windows. Off the main thread; see `axQueue`.
+    private nonisolated static func minimizedWindows(of pid: pid_t) -> [MinimizedWindow] {
+        guard let getWindowID = WindowActions.getWindowIDFn, let windows = WindowActions.windows(of: pid) else {
+            return []
+        }
+        var found: [MinimizedWindow] = []
+        for window in windows where isMinimized(window) {
+            var id: CGWindowID = 0
+            guard getWindowID(window, &id) == .success, id != 0 else { continue }
+            // The AX title, which needs no Screen Recording, unlike the window server's.
+            found.append(MinimizedWindow(id: id, pid: pid, title: string(of: window, kAXTitleAttribute) ?? ""))
+        }
+        return found
+    }
+
+    /// Apps that were not asked keep what the last sweep found for them.
+    private func applyMinimizedWindows(order: [pid_t], answers: [pid_t: [MinimizedWindow]]) {
+        isSweepingMinimized = false
+        guard settings.showsMinimizedWindows else { return }
+        let found = order.flatMap { pid in answers[pid] ?? minimizedWindows.filter { $0.pid == pid } }
         let known = Set(minimizedWindows.map(\.identity))
         guard Set(found.map(\.identity)) != known else { return }
         let fresh = found.filter { !known.contains($0.identity) }
         minimizedWindows = found
         minimizedThumbs = minimizedThumbs.filter { thumb in found.contains { $0.id == thumb.key } }
         rebuild()
-        // Thumbnails arrive late and only for windows still minimized then.
+        // Thumbnails arrive late and only for windows still minimized then. Only with Screen
+        // Recording already granted: asking for it belongs to a hover over a preview, not to a
+        // window someone happened to minimize.
+        guard WindowCapture.canCapture else { return }
         for window in fresh {
             Task { [weak self] in
                 guard let image = await WindowCapture.windowThumbnail(windowID: window.id, maxHeight: 120)
@@ -357,11 +405,28 @@ final class DockModel {
             if !badges.isEmpty { badges = [:] }
             return
         }
-        let element = AXUIElementCreateApplication(dock.processIdentifier)
+        guard !isSweepingBadges else { return }
+        isSweepingBadges = true
+        let pid = dock.processIdentifier
+        Self.axQueue.async { [weak self] in
+            let found = Self.badges(from: Self.dockTiles(pid: pid))
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isSweepingBadges = false
+                    if found != self.badges { self.badges = found }
+                }
+            }
+        }
+    }
+
+    /// Each Dock tile's URL and badge. Off the main thread; see `axQueue`.
+    private nonisolated static func dockTiles(pid: pid_t) -> [(url: URL?, label: String?)] {
+        let element = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(element, 0.3)
         var tiles: [(url: URL?, label: String?)] = []
-        for list in Self.children(of: element) {
-            for tile in Self.children(of: list) {
+        for list in children(of: element) {
+            for tile in children(of: list) {
                 var values: CFArray?
                 guard AXUIElementCopyMultipleAttributeValues(
                     tile, [kAXURLAttribute, "AXStatusLabel"] as CFArray, [], &values) == .success,
@@ -370,8 +435,7 @@ final class DockModel {
                 tiles.append((values[0] as? URL, values[1] as? String))
             }
         }
-        let found = Self.badges(from: tiles)
-        if found != badges { badges = found }
+        return tiles
     }
 
     /// The badges by item id. Only apps' tiles carry a URL; an empty label is no badge. Pure, for the
@@ -385,7 +449,7 @@ final class DockModel {
         return out
     }
 
-    private static func children(of element: AXUIElement) -> [AXUIElement] {
+    private nonisolated static func children(of element: AXUIElement) -> [AXUIElement] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success
         else { return [] }
@@ -479,15 +543,7 @@ final class DockModel {
             // global, which Swift 6 will not read from here.
             trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         }
-        guard trusted else { return }
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        // AX calls block until the app answers, and this runs on the main thread: a hung app would
-        // freeze the dock for the default six seconds per call.
-        AXUIElementSetMessagingTimeout(element, 0.3)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement]
-        else { return }
+        guard trusted, let windows = WindowActions.windows(of: app.processIdentifier) else { return }
         // Standard windows only: panels, sheets and palettes do not count as something to show.
         let standard = windows.filter { Self.string(of: $0, kAXSubroleAttribute) == kAXStandardWindowSubrole }
         guard !standard.isEmpty, standard.allSatisfy({ Self.isMinimized($0) }), let window = standard.first else {
@@ -497,7 +553,7 @@ final class DockModel {
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
     }
 
-    private static func isMinimized(_ window: AXUIElement) -> Bool {
+    private nonisolated static func isMinimized(_ window: AXUIElement) -> Bool {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success else {
             return false
@@ -505,7 +561,7 @@ final class DockModel {
         return (value as? Bool) == true
     }
 
-    private static func string(of element: AXUIElement, _ attribute: String) -> String? {
+    private nonisolated static func string(of element: AXUIElement, _ attribute: String) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
         return value as? String
@@ -603,14 +659,27 @@ final class DockModel {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", "tell application \"Finder\" to empty trash"]
+        let err = Pipe()
+        process.standardError = err
         process.terminationHandler = { [weak self] process in
-            let failed = process.terminationStatus != 0
+            // Only a refusal (-1743) is a permission problem. Cancelling Finder's "are you sure?"
+            // (-128) is the user's answer, and any other failure is not something Automation fixes —
+            // both used to bring up the permission alert all the same.
+            let message = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let denied = process.terminationStatus != 0 && message.contains("-1743")
+            if process.terminationStatus != 0, !denied, !message.contains("-128") {
+                NSLog("DockIt: emptying the Trash failed: \(message)")
+            }
             Task { @MainActor in
                 self?.refreshTrash()
-                if failed { DockModel.explainAutomationDenied() }
+                if denied { DockModel.explainAutomationDenied() }
             }
         }
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            NSLog("DockIt: could not run osascript to empty the Trash: \(error)")
+        }
     }
 
     /// osascript fails when DockIt is not allowed to control Finder, and otherwise nothing would say so.

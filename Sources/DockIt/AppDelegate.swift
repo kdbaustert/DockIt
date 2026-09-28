@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import Sparkle
 
 @main
@@ -95,11 +96,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Asks whether to bring the macOS Dock back. Not at logout or shutdown: nobody is there to
-    /// answer, and restoring would flash the system Dock at the next login before DockIt hid it again.
-    /// Nor for an update's relaunch, for the same reason: the new copy starts at once and hides the
-    /// Dock again from the saved originals, which stay in place.
+    /// answer. Then it is restored without asking, unless DockIt starts at login — only then does
+    /// something hide the Dock again, and restoring would just flash it at the next login. Without
+    /// the login item, keeping it hidden left the next session with no dock at all. Nor for an
+    /// update's relaunch: the new copy starts at once and hides the Dock again from the saved
+    /// originals, which stay in place.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard settings.hidesSystemDock, !Self.isSystemQuit(), !updateChannels.isRelaunchingForUpdate else {
+        guard settings.hidesSystemDock, !updateChannels.isRelaunchingForUpdate else { return .terminateNow }
+        if Self.isSystemQuit() {
+            if SMAppService.mainApp.status != .enabled {
+                watchdog?.invalidate()
+                SystemDock.restore()
+            }
             return .terminateNow
         }
 

@@ -100,6 +100,13 @@ echo "==> Built $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
     echo "==> Installing to /Applications"
+    # Copied beside the old copy first, so a failed copy leaves it installed; only the rename below
+    # runs with no app in place. Not named *.app, so nothing registers the half-copied bundle. And
+    # before DockIt is stopped: a copy that failed after the kill (disk full, no write access) left
+    # the old copy installed but not running, and the macOS Dock hidden — no dock at all.
+    STAGED="/Applications/.DockIt-installing"
+    rm -rf "$STAGED"
+    cp -R "$APP" "$STAGED"
     # SIGTERM, not `quit app`: a real quit restores the macOS Dock, and the relaunch below would
     # hide it again — two Dock restarts per install. Killed, DockIt leaves the Dock hidden and its
     # saved originals in place, and the new copy finds nothing to change.
@@ -109,11 +116,6 @@ if [[ "${1:-}" == "--install" ]]; then
         sleep 0.1
     done
     pkill -9 -x DockIt 2>/dev/null || true
-    # Copied beside the old copy first, so a failed copy leaves it installed; only the rename below
-    # runs with no app in place. Not named *.app, so nothing registers the half-copied bundle.
-    STAGED="/Applications/.DockIt-installing"
-    rm -rf "$STAGED"
-    cp -R "$APP" "$STAGED"
     rm -rf /Applications/DockIt.app
     mv "$STAGED" /Applications/DockIt.app
     open /Applications/DockIt.app

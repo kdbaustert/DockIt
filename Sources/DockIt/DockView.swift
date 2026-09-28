@@ -6,8 +6,8 @@ struct DockView: View {
     let settings: DockSettings
 
     var body: some View {
-        let metrics = model.metrics
         let layout = model.layout(for: state)
+        let metrics = layout.metrics
         let hovered = state.pointer.flatMap(layout.index(at:))
         let edge = settings.edge
         let horizontal = edge == .bottom
@@ -393,10 +393,10 @@ private struct NowPlayingTile: View {
             .frame(width: height * 0.82, height: height * 0.82)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
-                Text(widgets.trackTitle ?? "Nothing Playing")
+                Text(widgets.trackTitle ?? (widgets.deniedPlayer == nil ? "Nothing Playing" : "Not Allowed"))
                     .font(.system(size: 10, weight: .bold))
                     .lineLimit(1)
-                Text(widgets.trackTitle == nil ? "" : widgets.trackArtist)
+                Text(widgets.trackTitle == nil ? deniedHint : widgets.trackArtist)
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -409,10 +409,15 @@ private struct NowPlayingTile: View {
             }
         }
         .padding(.horizontal, 7)
-        .frame(width: width, height: height)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .widgetTile(width: width, height: height)
         .contentShape(Rectangle())
-        .onTapGesture { widgets.playPause() }
+        .onTapGesture {
+            if widgets.trackTitle == nil, widgets.deniedPlayer != nil {
+                openAutomationSettings()
+            } else {
+                widgets.playPause()
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Now Playing")
         .accessibilityValue(accessibilityValue)
@@ -424,6 +429,9 @@ private struct NowPlayingTile: View {
             Button("Play/Pause") { widgets.playPause() }
             Button("Next Track") { widgets.nextTrack() }
             Button("Previous Track") { widgets.previousTrack() }
+            if widgets.deniedPlayer != nil {
+                Button("Open Automation Settings…") { openAutomationSettings() }
+            }
             Divider()
             // The same setting as Settings ▸ Widgets ▸ Now playing.
             Button("Remove from Dock") { DockSettings.shared.showsNowPlaying = false }
@@ -432,7 +440,21 @@ private struct NowPlayingTile: View {
         }
     }
 
+    /// Where the permission is granted, once the tile says it is missing.
+    private var deniedHint: String {
+        widgets.deniedPlayer.map { "Allow control of \($0)" } ?? ""
+    }
+
+    private func openAutomationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private var accessibilityValue: String {
+        if widgets.trackTitle == nil, let denied = widgets.deniedPlayer {
+            return "DockIt is not allowed to control \(denied)"
+        }
         guard let title = widgets.trackTitle else { return "Nothing playing" }
         let track = widgets.trackArtist.isEmpty ? title : "\(title) by \(widgets.trackArtist)"
         return "\(track), \(widgets.isPlaying ? "playing" : "paused")"
@@ -462,8 +484,7 @@ private struct WeatherTile: View {
             }
         }
         .padding(.horizontal, 7)
-        .frame(width: width, height: height)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .widgetTile(width: width, height: height)
         // The symbol is decoration here; the words carry it.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Weather")
@@ -494,8 +515,7 @@ private struct ClockTile: View {
                 .font(.system(size: 8))
                 .foregroundStyle(.secondary)
         }
-        .frame(width: width, height: height)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .widgetTile(width: width, height: height)
         .accessibilityElement(children: .combine)
         .contextMenu {
             // The same setting as Settings ▸ Widgets ▸ Clock.
@@ -539,6 +559,14 @@ private struct DockMenuFooter: View {
         Divider()
         Button("DockIt Settings…") { SettingsWindow.show() }
         Button("Quit DockIt") { NSApp.terminate(nil) }
+    }
+}
+
+private extension View {
+    /// The widget tiles' shared chrome: their size and the faint rounded backing.
+    func widgetTile(width: CGFloat, height: CGFloat) -> some View {
+        frame(width: width, height: height)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
     }
 }
 

@@ -123,6 +123,29 @@ struct DockLayout: Equatable {
         return nil
     }
 
+    /// The metrics with the icons shrunk, when need be, so the resting bar fits in `available` — the
+    /// macOS Dock shrinks its icons rather than run off the screen, and running off put Finder and
+    /// the Trash out of reach. What scales with the icon size shrinks with it; separators and widget
+    /// tiles keep their fixed widths. Without magnification the magnified size follows the icons down,
+    /// or the smaller icons would read as magnifiable.
+    static func fitted(
+        _ m: DockMetrics, available: CGFloat, minimumIconSize: CGFloat = 16,
+        specs: (DockMetrics) -> [DockItemSpec]
+    ) -> DockMetrics {
+        let full = length(of: specs(m).map(\.resting), metrics: m)
+        guard available > 0, full > available, m.iconSize > 0 else { return m }
+        // The length is linear in the icon size: what does not scale, plus so much per point of it.
+        var unscaled = m
+        unscaled.iconSize = 0
+        let fixed = length(of: specs(unscaled).map(\.resting), metrics: m)
+        let perPoint = (full - fixed) / m.iconSize
+        guard perPoint > 0 else { return m }
+        var out = m
+        out.iconSize = max(((available - fixed) / perPoint).rounded(.down), min(minimumIconSize, m.iconSize))
+        if m.magnifiedSize == m.iconSize { out.magnifiedSize = out.iconSize }
+        return out
+    }
+
     private static func length(of sizes: [CGFloat], metrics m: DockMetrics) -> CGFloat {
         sizes.reduce(0, +) + m.spacing * CGFloat(max(sizes.count - 1, 0)) + 2 * m.padding
     }

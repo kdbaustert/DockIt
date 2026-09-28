@@ -107,4 +107,42 @@ final class DockLayoutTests: XCTestCase {
         let layout = DockLayout(items: items, metrics: metrics, stripLength: 1000, pointer: 500) { _, _ in 0.5 }
         XCTAssertEqual(layout.depth, 60)
     }
+
+    // MARK: - Fitting to the screen
+
+    /// Three icons and a separator: 140 long at rest — 20 that does not scale, 3 per icon point.
+    private func fitSpecs(_ m: DockMetrics) -> [DockItemSpec] {
+        [.icon(m), .icon(m), .fixed(10), .icon(m)]
+    }
+
+    func testFittingRowIsLeftAlone() {
+        XCTAssertEqual(DockLayout.fitted(metrics, available: 140, specs: fitSpecs), metrics)
+    }
+
+    func testOverflowingRowShrinksItsIcons() {
+        let fitted = DockLayout.fitted(metrics, available: 100, specs: fitSpecs)
+        XCTAssertEqual(fitted.iconSize, 26)
+        // Still magnifies to the size asked for.
+        XCTAssertEqual(fitted.magnifiedSize, 80)
+        let layout = DockLayout(items: fitSpecs(fitted), metrics: fitted, stripLength: 100, pointer: nil) { _, _ in 1 }
+        XCTAssertLessThanOrEqual(layout.length, 100)
+    }
+
+    /// With magnification off the two sizes are equal; shrinking only one would make the icons grow.
+    func testWithoutMagnificationBothSizesShrink() {
+        var flat = metrics
+        flat.magnifiedSize = flat.iconSize
+        let fitted = DockLayout.fitted(flat, available: 100, specs: fitSpecs)
+        XCTAssertEqual(fitted.iconSize, 26)
+        XCTAssertEqual(fitted.magnifiedSize, 26)
+    }
+
+    func testIconsNeverShrinkBelowTheMinimum() {
+        XCTAssertEqual(DockLayout.fitted(metrics, available: 30, specs: fitSpecs).iconSize, 16)
+    }
+
+    /// Before the panel is laid out its strip is zero long; that is no reason to shrink anything.
+    func testNoStripYetChangesNothing() {
+        XCTAssertEqual(DockLayout.fitted(metrics, available: -16, specs: fitSpecs), metrics)
+    }
 }

@@ -147,8 +147,8 @@ final class DockController {
         case .left: (frame.maxY - mouse.y, mouse.x - frame.minX)
         case .right: (frame.maxY - mouse.y, frame.maxX - mouse.x)
         }
-        let metrics = model.metrics
         let layout = model.layout(for: state)
+        let metrics = layout.metrics
         let onEdge = along >= 0 && along <= state.stripLength && across >= -1
         // Once magnified, the grown icons are part of the bar; before that, only the resting bar is.
         let reach = state.pointer == nil ? metrics.thickness : layout.depth + metrics.padding

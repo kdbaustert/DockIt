@@ -137,13 +137,9 @@ enum WindowCapture {
     /// The windows the app itself lists over Accessibility. Empty for Electron apps — and when the
     /// permission is missing — so membership can only ever rescue a window, never veto one.
     private nonisolated static func axWindowIDs(pid: pid_t) -> Set<CGWindowID> {
-        guard let getWindowID = WindowActions.getWindowIDFn else { return [] }
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.3)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement]
-        else { return [] }
+        guard let getWindowID = WindowActions.getWindowIDFn, let windows = WindowActions.windows(of: pid) else {
+            return []
+        }
         var out: Set<CGWindowID> = []
         for window in windows {
             var id: CGWindowID = 0
@@ -208,6 +204,19 @@ enum WindowActions {
         else { return nil }
         return unsafeBitCast(symbol, to: GetWindowFn.self)
     }()
+
+    /// An app's windows as it lists them over Accessibility; nil when it will not say. AX calls block
+    /// until the app answers, and a hung app would hold the caller for the default six seconds — so
+    /// 0.3 s, which every caller here wants.
+    nonisolated static func windows(of pid: pid_t) -> [AXUIElement]? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success else {
+            return nil
+        }
+        return value as? [AXUIElement]
+    }
 
     /// Whether closing a window has shown the Accessibility prompt in this run.
     private static var hasPromptedForAccessibility = false
@@ -309,13 +318,9 @@ enum WindowActions {
     }
 
     private static func element(for windowID: CGWindowID, pid: pid_t) -> AXUIElement? {
-        guard AXIsProcessTrusted(), let getWindowID = Self.getWindowIDFn else { return nil }
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.3)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement]
-        else { return nil }
+        guard AXIsProcessTrusted(), let getWindowID = Self.getWindowIDFn, let windows = windows(of: pid) else {
+            return nil
+        }
         for window in windows {
             var id: CGWindowID = 0
             if getWindowID(window, &id) == .success, id == windowID { return window }

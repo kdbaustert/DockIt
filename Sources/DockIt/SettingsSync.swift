@@ -206,7 +206,11 @@ enum SettingsFile {
 /// are noticed by watching the folder, with a slow poll behind it because iCloud does not always
 /// deliver a file-system event when it swaps a download in. Last writer wins.
 @MainActor
+@Observable
 final class SettingsSync {
+    /// The running sync, for Settings to show its last error.
+    private(set) static weak var current: SettingsSync?
+
     static var folderURL: URL? {
         let cloudDocs = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
@@ -219,18 +223,27 @@ final class SettingsSync {
 
     private static var fileURL: URL? { folderURL?.appendingPathComponent("settings.json") }
 
-    private let settings: DockSettings
-    private var isRunning = false
+    /// Why the last write failed, until one succeeds; shown under the sync toggle. It used to go
+    /// only to the log, so a sync that had stopped working looked exactly like one that worked.
+    private(set) var lastError: String?
+
+    @ObservationIgnored private let settings: DockSettings
+    @ObservationIgnored private var isRunning = false
     /// The settings the file and this Mac last agreed on. A change that matches it — the echo of
     /// applying the file, or a file this Mac wrote itself — is not sent back round.
-    private var agreed: PortableSettings?
-    private var lastModified: Date?
-    private var pendingWrite: DispatchWorkItem?
-    private var watcher: DispatchSourceFileSystemObject?
-    private var poll: Timer?
+    @ObservationIgnored private var agreed: PortableSettings?
+    /// Whether this Mac may write: only once it has adopted the file, or seen that there is none.
+    /// Until then a write would put this Mac's settings over another's that simply had not
+    /// downloaded yet — at a launch offline, or before iCloud had fetched the file.
+    @ObservationIgnored private var mayWrite = false
+    @ObservationIgnored private var lastModified: Date?
+    @ObservationIgnored private var pendingWrite: DispatchWorkItem?
+    @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var poll: Timer?
 
     init(settings: DockSettings) {
         self.settings = settings
+        Self.current = self
         observeContinuously(ownedBy: self) { [weak self] in
             guard let self else { return }
             settings.syncsWithICloud && Self.isAvailable ? start() : stop()
@@ -247,14 +260,18 @@ final class SettingsSync {
         isRunning = true
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Turning sync on adopts what another Mac already put there; only an empty iCloud gets this
-        // Mac's settings.
-        if !readRemote() {
+        // Mac's settings. A file that is not readable yet is left alone: the watcher and the poll
+        // read it again once it lands.
+        switch readRemote() {
+        case .absent:
             writeNow()
-        } else {
+        case .adopted, .unchanged:
             // Rewrite what was adopted in the current schema. Without this, a file from an older
             // DockIt is re-adopted at every launch and its converted values stomp any change made
             // since — measured: an old "magnifiedSize" file reset the Amount slider on each launch.
             scheduleWrite()
+        case .pending:
+            break
         }
         watch(folder)
         let poll = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
@@ -275,6 +292,8 @@ final class SettingsSync {
         poll?.invalidate()
         poll = nil
         agreed = nil
+        mayWrite = false
+        lastError = nil
         lastModified = nil
     }
 
@@ -317,7 +336,7 @@ final class SettingsSync {
     }
 
     private func writeNow() {
-        guard isRunning, let url = Self.fileURL else { return }
+        guard isRunning, mayWrite, let url = Self.fileURL else { return }
         let current = settings.portable
         guard current != agreed else { return }
         do {
@@ -327,35 +346,50 @@ final class SettingsSync {
             try current.encoded().write(to: url, options: .atomic)
             agreed = current
             lastModified = Self.modified(url)
+            lastError = nil
         } catch {
             NSLog("DockIt: could not write iCloud settings: \(error)")
+            lastError = error.localizedDescription
         }
     }
 
-    /// Applies the file when it changed since last read. Returns whether a file was there to read.
+    enum ReadResult { case adopted, unchanged, absent, pending }
+
+    /// Applies the file when it changed since last read.
     @discardableResult
-    private func readRemote() -> Bool {
-        guard isRunning, let url = Self.fileURL else { return false }
+    private func readRemote() -> ReadResult {
+        guard isRunning, let url = Self.fileURL else { return .pending }
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else {
-            // Evicted to save space: iCloud keeps a ".settings.json.icloud" placeholder instead.
+            // Evicted to save space, older iCloud: a ".settings.json.icloud" placeholder instead.
             // Ask for it back; the folder watcher sees it land.
             let placeholder = url.deletingLastPathComponent().appendingPathComponent(".settings.json.icloud")
             if fm.fileExists(atPath: placeholder.path) {
                 try? fm.startDownloadingUbiquitousItem(at: url)
-                return true
+                return .pending
             }
-            return false
+            mayWrite = true
+            return .absent
+        }
+        // Evicted on macOS 26: the file keeps its name but is "dataless" (`ls -lO`), and reading
+        // it downloads it synchronously — on the main thread, for as long as the network takes.
+        // Read it on a background queue instead, which brings it down; the watcher sees it land.
+        var info = stat()
+        if stat(url.path, &info) == 0, info.st_flags & UInt32(SF_DATALESS) != 0 {
+            DispatchQueue.global(qos: .utility).async { _ = try? Data(contentsOf: url) }
+            return .pending
         }
         let modified = Self.modified(url)
-        if let modified, modified == lastModified { return true }
+        if let modified, modified == lastModified { return .unchanged }
         guard let data = try? Data(contentsOf: url), let remote = try? PortableSettings.decoded(from: data) else {
-            return true
+            return .pending
         }
         lastModified = modified
         agreed = remote
+        mayWrite = true
+        lastError = nil
         settings.apply(remote)
-        return true
+        return .adopted
     }
 
     private static func modified(_ url: URL) -> Date? {
