@@ -378,6 +378,15 @@ struct VisualEffectBackground: NSViewRepresentable {
 }
 
 extension Color {
+    /// Nil for pattern-backed and catalog colours the panel can hand back; callers keep what they had.
+    var hexString: String? {
+        guard let ns = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let r = Int((ns.redComponent * 255).rounded())
+        let g = Int((ns.greenComponent * 255).rounded())
+        let b = Int((ns.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
     /// Parses `#RRGGBB` — how Cmd-Tab writes its badge gradients, kept so the values match exactly.
     init?(hex: String) {
         var s = hex

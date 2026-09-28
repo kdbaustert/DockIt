@@ -22,18 +22,47 @@ struct DockView: View {
                     width: horizontal ? layout.length : metrics.thickness,
                     height: horizontal ? metrics.thickness : layout.length
                 )
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .glassEffect(.regular, in: .rect(cornerRadius: settings.barCornerRadius))
+                // The tint sits over the glass, so the desktop still shows through the colour.
+                .overlay {
+                    if let tint = Color(hex: settings.barTint) {
+                        RoundedRectangle(cornerRadius: settings.barCornerRadius, style: .continuous)
+                            .fill(tint.opacity(settings.barTintIntensity / 100))
+                            .allowsHitTesting(false)
+                    }
+                }
                 .contentShape(Rectangle())
-                .contextMenu { DockMenuFooter() }
+                .contextMenu {
+                    Button("Add Spacer") { model.addSpacer() }
+                    Divider()
+                    DockMenuFooter()
+                }
                 .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: nil) }
                 .padding(edge.alongStart, layout.start)
 
             row {
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
                     let size = index < layout.sizes.count ? layout.sizes[index] : metrics.iconSize
-                    if item.kind == .separator {
+                    switch item.kind {
+                    case .separator:
                         SeparatorView(extent: size, iconSize: metrics.iconSize, horizontal: horizontal)
-                    } else {
+                    case .spacer:
+                        SpacerTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
+                    case .minimizedWindow:
+                        MinimizedTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
+                    case .nowPlaying:
+                        NowPlayingTile(width: size, height: metrics.iconSize)
+                            .onDrag { model.dragPayload(for: item) }
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .weather:
+                        WeatherTile(width: size, height: metrics.iconSize)
+                            .onDrag { model.dragPayload(for: item) }
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .clock:
+                        ClockTile(width: size, height: metrics.iconSize)
+                            .onDrag { model.dragPayload(for: item) }
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .app, .folder, .trash:
                         DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
                     }
                 }
@@ -77,6 +106,15 @@ private struct DockIcon: View {
                 }
             }
             .brightness(isTargeted ? 0.15 : 0)
+            .shadow(color: .black.opacity(model.settings.iconShadows ? 0.35 : 0), radius: 3, y: 1)
+            .overlay(alignment: edge.dotAlignment) {
+                if model.settings.showsRunningDots, item.isRunning, item.kind == .app {
+                    Circle()
+                        .fill(.primary.opacity(0.75))
+                        .frame(width: 4, height: 4)
+                        .offset(edge.hiddenOffset(model.metrics.padding / 2 + 2))
+                }
+            }
             // Reaches half the icon padding past the icon, so neighbouring highlights never touch.
             .background {
                 if isHovered {
@@ -177,7 +215,14 @@ private struct DockItemMenu: View {
         case .trash:
             Button("Open") { model.open(item) }
             Button("Empty Trash") { model.emptyTrash() }
-        case .separator:
+        case .minimizedWindow:
+            Button("Restore") { model.open(item) }
+            if let windowID = item.windowID, let pid = item.pid {
+                Button("Close Window") { WindowActions.close(windowID, pid: pid) }
+            }
+        case .spacer:
+            Button("Remove from Dock") { model.unpin(item) }
+        case .separator, .nowPlaying, .weather, .clock:
             EmptyView()
         }
     }
@@ -219,11 +264,198 @@ private struct AssignToMenu: View {
     }
 }
 
+/// Invisible, but draggable and removable — a gap the user placed.
+private struct SpacerTile: View {
+    let item: DockItem
+    let extent: CGFloat
+    let iconSize: CGFloat
+    let horizontal: Bool
+    let model: DockModel
+
+    @State private var isHovered = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            // Invisible until the pointer is on it: a gap that never announces itself, but can
+            // still be found, grabbed and dragged.
+            .fill(.primary.opacity(isHovered ? 0.12 : 0))
+            .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .contextMenu {
+                DockItemMenu(item: item, model: model)
+                Divider()
+                DockMenuFooter()
+            }
+            .onDrag {
+                model.dragPayload(for: item)
+            } preview: {
+                // Dragging an invisible view drags an invisible image, which reads as a broken drag.
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.primary.opacity(0.25))
+                    .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
+            }
+            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+    }
+}
+
+/// A minimized window: its own snapshot, restored by a click — the real Dock's right side.
+private struct MinimizedTile: View {
+    let item: DockItem
+    let extent: CGFloat
+    let iconSize: CGFloat
+    let horizontal: Bool
+    let model: DockModel
+
+    var body: some View {
+        Group {
+            if let windowID = item.windowID, let thumb = model.minimizedThumbs[windowID] {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            } else {
+                // The snapshot arrives late; until then, the owning app's icon marks the spot.
+                Image(nsImage: item.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.icon } ?? NSImage())
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .opacity(0.8)
+            }
+        }
+        // `extent` runs along the bar, which is vertical on a side dock.
+        .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
+        .help(item.name)
+        .contentShape(Rectangle())
+        .onTapGesture { model.open(item) }
+        .contextMenu {
+            DockItemMenu(item: item, model: model)
+            Divider()
+            DockMenuFooter()
+        }
+    }
+}
+
+private struct NowPlayingTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Group {
+                if let artwork = widgets.artwork {
+                    Image(nsImage: artwork).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Image(systemName: "music.note")
+                        .font(.system(size: height * 0.4))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.primary.opacity(0.08))
+                }
+            }
+            .frame(width: height * 0.82, height: height * 0.82)
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(widgets.trackTitle ?? "Nothing Playing")
+                    .font(.system(size: 10, weight: .bold))
+                    .lineLimit(1)
+                Text(widgets.trackTitle == nil ? "" : widgets.trackArtist)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if widgets.trackTitle != nil {
+                Image(systemName: widgets.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 7)
+        .frame(width: width, height: height)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .contentShape(Rectangle())
+        .onTapGesture { widgets.playPause() }
+        .contextMenu {
+            Button("Play/Pause") { widgets.playPause() }
+            Button("Next Track") { widgets.nextTrack() }
+            Button("Previous Track") { widgets.previousTrack() }
+            Divider()
+            // The same setting as Settings ▸ Widgets ▸ Now playing.
+            Button("Remove from Dock") { DockSettings.shared.showsNowPlaying = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+}
+
+private struct WeatherTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(widgets.weatherTemperature ?? "--°")
+                .font(.system(size: height * 0.42, weight: .semibold))
+            Image(systemName: widgets.weatherSymbol)
+                .font(.system(size: height * 0.3))
+                .symbolRenderingMode(.multicolor)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(widgets.weatherPlace)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(widgets.weatherHighLow)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 7)
+        .frame(width: width, height: height)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .contextMenu {
+            // The same setting as Settings ▸ Widgets ▸ Weather.
+            Button("Remove from Dock") { DockSettings.shared.showsWeather = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+}
+
+private struct ClockTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(widgets.clockTime)
+                .font(.system(size: height * 0.34, weight: .semibold, design: .rounded))
+            Text(widgets.clockDate)
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: width, height: height)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .contextMenu {
+            // The same setting as Settings ▸ Widgets ▸ Clock.
+            Button("Remove from Dock") { DockSettings.shared.showsClock = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+}
+
 private struct DockMenuFooter: View {
     var body: some View {
         // The macOS Dock's own wording, and the same setting as Settings ▸ General ▸ Visibility.
         Button(DockSettings.shared.autoHides ? "Turn Hiding Off" : "Turn Hiding On") {
             DockSettings.shared.autoHides.toggle()
+        }
+        // Worded to match, and the same setting as Settings ▸ Interactions ▸ Window previews.
+        Button(DockSettings.shared.showsWindowPreviews ? "Turn Previews Off" : "Turn Previews On") {
+            DockSettings.shared.showsWindowPreviews.toggle()
         }
         Divider()
         Button("DockIt Settings…") { SettingsWindow.show() }
@@ -256,6 +488,15 @@ private extension DockEdge {
         case .bottom: CGSize(width: 0, height: distance)
         case .left: CGSize(width: -distance, height: 0)
         case .right: CGSize(width: distance, height: 0)
+        }
+    }
+
+    /// Where the running dot sits: against the screen edge.
+    var dotAlignment: Alignment {
+        switch self {
+        case .bottom: .bottom
+        case .left: .leading
+        case .right: .trailing
         }
     }
 

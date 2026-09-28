@@ -34,6 +34,19 @@ func legacyMagnifyAmount(magnifiedSize: Double, iconSize: Double) -> Double {
     return (min(max(ratio, 1.0), 2.5) / 0.05).rounded() * 0.05
 }
 
+/// Every widget the bar knows, in their default order.
+let canonicalWidgetOrder = ["nowPlaying", "weather", "clock"]
+
+/// A saved widget order healed: each known widget once, where it first appears, then any missing
+/// ones in their default order, and nothing unknown. A stored order is only ever rewritten by
+/// dragging what is on the bar, so a widget missing from it — an order saved before the widget
+/// existed, or a hand-edited or synced file — would otherwise never show, even when turned on.
+func normalizedWidgetOrder(_ order: [String]) -> [String] {
+    var seen = Set<String>()
+    let kept = order.filter { canonicalWidgetOrder.contains($0) && seen.insert($0).inserted }
+    return kept + canonicalWidgetOrder.filter { !seen.contains($0) }
+}
+
 @MainActor
 @Observable
 final class DockSettings {
@@ -78,6 +91,31 @@ final class DockSettings {
     var previewDelay: Double { didSet { store.set(previewDelay, forKey: "previewDelay") } }
     /// Each thumbnail carries a close button and its window's title.
     var previewShowsControls: Bool { didSet { store.set(previewShowsControls, forKey: "previewShowsControls") } }
+    /// The open preview panel re-captures its thumbnails while it stays up.
+    var livePreviews: Bool { didSet { store.set(livePreviews, forKey: "livePreviews") } }
+    /// Minimized windows appear as their own tiles beside the Trash, as in the real Dock.
+    var showsMinimizedWindows: Bool { didSet { store.set(showsMinimizedWindows, forKey: "showsMinimizedWindows") } }
+    // Widgets at the bar's end.
+    var showsNowPlaying: Bool { didSet { store.set(showsNowPlaying, forKey: "showsNowPlaying") } }
+    var showsWeather: Bool { didSet { store.set(showsWeather, forKey: "showsWeather") } }
+    var showsClock: Bool { didSet { store.set(showsClock, forKey: "showsClock") } }
+    /// The widgets' left-to-right order; only the enabled ones show.
+    var widgetOrder: [String] { didSet { store.set(widgetOrder, forKey: "widgetOrder") } }
+    /// Coordinates picked from a city search; 0,0 (an empty patch of the Gulf of Guinea) means
+    /// "unset — geocode the typed name instead".
+    var weatherLatitude: Double { didSet { store.set(weatherLatitude, forKey: "weatherLatitude") } }
+    var weatherLongitude: Double { didSet { store.set(weatherLongitude, forKey: "weatherLongitude") } }
+    /// A place name; geocoded once per change.
+    var weatherLocation: String { didSet { store.set(weatherLocation, forKey: "weatherLocation") } }
+    var weatherFahrenheit: Bool { didSet { store.set(weatherFahrenheit, forKey: "weatherFahrenheit") } }
+    var clock24Hour: Bool { didSet { store.set(clock24Hour, forKey: "clock24Hour") } }
+    // Theme. An empty tint means the plain glass.
+    var barTint: String { didSet { store.set(barTint, forKey: "barTint") } }
+    var barTintIntensity: Double { didSet { store.set(barTintIntensity, forKey: "barTintIntensity") } }
+    var barCornerRadius: Double { didSet { store.set(barCornerRadius, forKey: "barCornerRadius") } }
+    var iconShadows: Bool { didSet { store.set(iconShadows, forKey: "iconShadows") } }
+    /// The little dot under running apps — off by default; it was removed once by request.
+    var showsRunningDots: Bool { didSet { store.set(showsRunningDots, forKey: "showsRunningDots") } }
     var showsMenuBarIcon: Bool { didSet { store.set(showsMenuBarIcon, forKey: "showsMenuBarIcon") } }
     /// Keep the portable settings in iCloud Drive — see SettingsSync. Per Mac, never synced itself.
     var syncsWithICloud: Bool { didSet { store.set(syncsWithICloud, forKey: "syncsWithICloud") } }
@@ -131,6 +169,22 @@ final class DockSettings {
             "showsWindowPreviews": true,
             "previewDelay": 0.5,
             "previewShowsControls": true,
+            "livePreviews": true,
+            "showsMinimizedWindows": true,
+            "showsNowPlaying": false,
+            "showsWeather": false,
+            "showsClock": false,
+            "widgetOrder": ["nowPlaying", "weather", "clock"],
+            "weatherLocation": "",
+            "weatherLatitude": 0.0,
+            "weatherLongitude": 0.0,
+            "weatherFahrenheit": true,
+            "clock24Hour": false,
+            "barTint": "",
+            "barTintIntensity": 20.0,
+            "barCornerRadius": 16.0,
+            "iconShadows": false,
+            "showsRunningDots": false,
             "showsMenuBarIcon": true,
             "syncsWithICloud": false,
             "displayMode": DisplayMode.primary.rawValue,
@@ -157,6 +211,22 @@ final class DockSettings {
         showsWindowPreviews = store.bool(forKey: "showsWindowPreviews")
         previewDelay = store.double(forKey: "previewDelay")
         previewShowsControls = store.bool(forKey: "previewShowsControls")
+        livePreviews = store.bool(forKey: "livePreviews")
+        showsMinimizedWindows = store.bool(forKey: "showsMinimizedWindows")
+        showsNowPlaying = store.bool(forKey: "showsNowPlaying")
+        showsWeather = store.bool(forKey: "showsWeather")
+        showsClock = store.bool(forKey: "showsClock")
+        widgetOrder = normalizedWidgetOrder(store.stringArray(forKey: "widgetOrder") ?? canonicalWidgetOrder)
+        weatherLocation = store.string(forKey: "weatherLocation") ?? ""
+        weatherLatitude = store.double(forKey: "weatherLatitude")
+        weatherLongitude = store.double(forKey: "weatherLongitude")
+        weatherFahrenheit = store.bool(forKey: "weatherFahrenheit")
+        clock24Hour = store.bool(forKey: "clock24Hour")
+        barTint = store.string(forKey: "barTint") ?? ""
+        barTintIntensity = store.double(forKey: "barTintIntensity")
+        barCornerRadius = store.double(forKey: "barCornerRadius")
+        iconShadows = store.bool(forKey: "iconShadows")
+        showsRunningDots = store.bool(forKey: "showsRunningDots")
         showsMenuBarIcon = store.bool(forKey: "showsMenuBarIcon")
         syncsWithICloud = store.bool(forKey: "syncsWithICloud")
         displayMode = DisplayMode(rawValue: store.string(forKey: "displayMode") ?? "") ?? .primary
@@ -182,5 +252,19 @@ final class DockSettings {
         store.set(stacks, forKey: "stacks")
         pinnedApps = pinned
         self.stacks = stacks
+    }
+
+    // MARK: - Spacers
+
+    /// Spacers on the dock. They live in `pinnedApps` so they order and drag like apps do.
+    var spacerCount: Int { pinnedApps.filter { $0.hasPrefix(spacerPrefix) }.count }
+
+    /// A new spacer at the end of the pinned apps; drag it from there to where it belongs.
+    func addSpacer() {
+        pinnedApps.append(spacerPrefix + UUID().uuidString)
+    }
+
+    func removeAllSpacers() {
+        pinnedApps.removeAll { $0.hasPrefix(spacerPrefix) }
     }
 }

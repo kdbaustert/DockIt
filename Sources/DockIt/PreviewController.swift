@@ -26,6 +26,7 @@ final class PreviewController {
     private var hoverStart: Date?
     private var leftAt: Date?
     private var captureTask: Task<Void, Never>?
+    private var refreshTimer: Timer?
     private var pointerInPanel = false
     /// The screen this dock lives on — where the panel must stay, whichever screen is "first".
     private weak var clampScreen: NSScreen?
@@ -83,6 +84,8 @@ final class PreviewController {
     }
 
     func hide() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
         captureTask?.cancel()
         captureTask = nil
         shownItemID = nil
@@ -123,6 +126,9 @@ final class PreviewController {
                 // Running, but nothing to show — a windowless agent, every capture came up blank, or
                 // the window list could not be read (`thumbnails` answers a thrown error with none).
                 // Not `hide()`: that forgets the hover, and the next dwell would capture again.
+                // The refresh timer goes, though: with the panel down it has nothing to refresh.
+                refreshTimer?.invalidate()
+                refreshTimer = nil
                 emptyItemID = item.id
                 shownItemID = nil
                 leftAt = nil
@@ -147,14 +153,43 @@ final class PreviewController {
                 }
             )
             present(AnyView(strip), center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+            startRefresh(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
         }
+    }
+
+    /// "Live" previews: the open panel re-captures on a beat. Fresh screenshots rather than a video
+    /// stream — a stream per window needs lifecycle the panel does not, and at this cadence the eye
+    /// reads stills as live for anything but full-motion video.
+    private func startRefresh(_ item: DockItem, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        guard settings.livePreviews else { return }
+        let timer = Timer(timeInterval: 0.6, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Live previews turned off while the panel is up: stop now, not at the next hide.
+                guard self.settings.livePreviews else {
+                    self.refreshTimer?.invalidate()
+                    self.refreshTimer = nil
+                    return
+                }
+                guard self.panel.isVisible, self.shownItemID == item.id, self.captureTask == nil else { return }
+                self.shownItemID = nil  // let show() run again for the same item
+                self.show(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+            }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
     }
 
     private func present(_ view: AnyView, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
         host.rootView = view
         let size = host.fittingSize
-        // Clear of the bar and the name labels that hang beside it.
-        let gap = barReach + 34.0
+        // Just clear of the (magnified) icons: the strip's own 4pt transparent margin leaves the
+        // glass 8pt off them. It covers the hovered app's name label, which the previews make
+        // redundant; clearing the label as well left a gap taller than a small icon.
+        let gap = barReach + 4.0
         var origin = switch edge {
         case .bottom:
             NSPoint(x: dockFrame.minX + center - size.width / 2, y: dockFrame.minY + gap)

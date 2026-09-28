@@ -147,7 +147,7 @@ final class DockController {
         let layout = model.layout(for: state)
         let onEdge = along >= 0 && along <= state.stripLength && across >= -1
         // Once magnified, the grown icons are part of the bar; before that, only the resting bar is.
-        let reach = state.pointer == nil ? metrics.thickness : (layout.sizes.max() ?? metrics.iconSize) + metrics.padding
+        let reach = state.pointer == nil ? metrics.thickness : layout.depth + metrics.padding
         let overBar = onEdge && !state.isHidden
             && along >= layout.start && along <= layout.start + layout.length && across <= reach
 

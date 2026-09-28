@@ -28,6 +28,22 @@ struct PortableSettings: Codable, Equatable {
     var showsWindowPreviews: Bool?
     var previewDelay: Double?
     var previewShowsControls: Bool?
+    var livePreviews: Bool?
+    var showsMinimizedWindows: Bool?
+    var showsNowPlaying: Bool?
+    var showsWeather: Bool?
+    var showsClock: Bool?
+    var widgetOrder: [String]?
+    var weatherLocation: String?
+    var weatherLatitude: Double?
+    var weatherLongitude: Double?
+    var weatherFahrenheit: Bool?
+    var clock24Hour: Bool?
+    var barTint: String?
+    var barTintIntensity: Double?
+    var barCornerRadius: Double?
+    var iconShadows: Bool?
+    var showsRunningDots: Bool?
     var showsMenuBarIcon: Bool?
     var pinnedApps: [String]?
     var stacks: [String]?
@@ -56,6 +72,10 @@ struct PortableSettings: Codable, Equatable {
         p.iconPadding = clamp(iconPadding, 0...24)
         p.dockPadding = clamp(dockPadding, 0...24)
         p.magnifyAmount = clamp(magnifyAmount, 1...2.5)
+        p.barTintIntensity = clamp(barTintIntensity, 0...60)
+        p.barCornerRadius = clamp(barCornerRadius, 8...24)
+        p.weatherLatitude = clamp(weatherLatitude, -90...90)
+        p.weatherLongitude = clamp(weatherLongitude, -180...180)
         p.magnifyReach = clamp(magnifyReach, 1...4)
         p.hoverIntensity = clamp(hoverIntensity, 0...40)
         p.previewDelay = clamp(previewDelay, 0...2)
@@ -79,6 +99,14 @@ extension DockSettings {
             revealSpeed: revealSpeed, hideSpeed: hideSpeed,
             showsWindowPreviews: showsWindowPreviews, previewDelay: previewDelay,
             previewShowsControls: previewShowsControls,
+            livePreviews: livePreviews, showsMinimizedWindows: showsMinimizedWindows,
+            showsNowPlaying: showsNowPlaying, showsWeather: showsWeather, showsClock: showsClock,
+            widgetOrder: widgetOrder, weatherLocation: weatherLocation,
+            weatherLatitude: weatherLatitude, weatherLongitude: weatherLongitude,
+            weatherFahrenheit: weatherFahrenheit,
+            clock24Hour: clock24Hour, barTint: barTint, barTintIntensity: barTintIntensity,
+            barCornerRadius: barCornerRadius, iconShadows: iconShadows,
+            showsRunningDots: showsRunningDots,
             showsMenuBarIcon: showsMenuBarIcon, pinnedApps: pinnedApps, stacks: stacks, hiddenApps: hiddenApps
         )
     }
@@ -112,6 +140,22 @@ extension DockSettings {
         if let v = p.showsWindowPreviews, v != showsWindowPreviews { showsWindowPreviews = v }
         if let v = p.previewDelay, v != previewDelay { previewDelay = v }
         if let v = p.previewShowsControls, v != previewShowsControls { previewShowsControls = v }
+        if let v = p.livePreviews, v != livePreviews { livePreviews = v }
+        if let v = p.showsMinimizedWindows, v != showsMinimizedWindows { showsMinimizedWindows = v }
+        if let v = p.showsNowPlaying, v != showsNowPlaying { showsNowPlaying = v }
+        if let v = p.showsWeather, v != showsWeather { showsWeather = v }
+        if let v = p.showsClock, v != showsClock { showsClock = v }
+        if let v = p.widgetOrder, v != widgetOrder { widgetOrder = v }
+        if let v = p.weatherLocation, v != weatherLocation { weatherLocation = v }
+        if let v = p.weatherLatitude, v != weatherLatitude { weatherLatitude = v }
+        if let v = p.weatherLongitude, v != weatherLongitude { weatherLongitude = v }
+        if let v = p.weatherFahrenheit, v != weatherFahrenheit { weatherFahrenheit = v }
+        if let v = p.clock24Hour, v != clock24Hour { clock24Hour = v }
+        if let v = p.barTint, v != barTint { barTint = v }
+        if let v = p.barTintIntensity, v != barTintIntensity { barTintIntensity = v }
+        if let v = p.barCornerRadius, v != barCornerRadius { barCornerRadius = v }
+        if let v = p.iconShadows, v != iconShadows { iconShadows = v }
+        if let v = p.showsRunningDots, v != showsRunningDots { showsRunningDots = v }
         if let v = p.showsMenuBarIcon, v != showsMenuBarIcon { showsMenuBarIcon = v }
         if let v = p.pinnedApps, v != pinnedApps { pinnedApps = v }
         if let v = p.stacks, v != stacks { stacks = v }

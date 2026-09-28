@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct DockItem: Identifiable, Equatable, Sendable {
-    enum Kind: Sendable { case app, folder, trash, separator }
+    enum Kind: Sendable { case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock }
 
     let id: String
     let kind: Kind
@@ -13,6 +13,36 @@ struct DockItem: Identifiable, Equatable, Sendable {
     let isPinned: Bool
     let isRunning: Bool
     let pid: pid_t?
+    /// The window a `.minimizedWindow` tile stands for.
+    var windowID: CGWindowID?
+
+    /// How much of the bar the item takes. The widget widths are fixed points: their content is
+    /// text, which does not scale with the icons.
+    func spec(for m: DockMetrics) -> DockItemSpec {
+        switch kind {
+        case .app, .folder, .trash: .icon(m)
+        case .minimizedWindow: .init(resting: m.iconSize * 1.4, magnifies: false)
+        case .separator: .fixed(m.separatorExtent)
+        case .spacer: .fixed(m.iconSize * 0.55)
+        case .nowPlaying: .fixed(180)
+        case .weather: .fixed(128)
+        case .clock: .fixed(84)
+        }
+    }
+}
+
+/// Spacers persist inside `pinnedApps` so they order and drag like everything else there.
+let spacerPrefix = "spacer:"
+
+struct MinimizedWindow: Equatable, Sendable {
+    let id: CGWindowID
+    let pid: pid_t
+    let title: String
+
+    /// Which window this is, title aside: a title that changes while minimized (a player's track,
+    /// a terminal's command) is not a different window and must not rebuild or re-screenshot it.
+    struct Identity: Hashable { let id: CGWindowID; let pid: pid_t }
+    var identity: Identity { Identity(id: id, pid: pid) }
 }
 
 /// The payload an icon carries while dragged inside the dock: the app's path under a type only DockIt
@@ -29,6 +59,10 @@ final class DockModel {
 
     private(set) var items: [DockItem] = []
     private(set) var trashIsFull = false
+    /// Windows currently in the Dock's sense of minimized — tiles between the separator and Trash.
+    private(set) var minimizedWindows: [MinimizedWindow] = []
+    /// Their thumbnails, tracked so the tile redraws when a late capture lands.
+    private(set) var minimizedThumbs: [CGWindowID: NSImage] = [:]
     /// Item ids of apps between starting to launch and finishing — their icons bounce.
     private(set) var launching: Set<String> = []
 
@@ -96,6 +130,7 @@ final class DockModel {
             MainActor.assumeIsolated {
                 self?.refreshTrash()
                 self?.rebuildIfRunningAppsChanged()
+                self?.refreshMinimizedWindows()
             }
         }
         maintenanceTimer.tolerance = 0.5
@@ -106,7 +141,9 @@ final class DockModel {
     /// the Applications or Stacks tab in Settings did.
     private func trackItems() {
         observeContinuously(ownedBy: self) { [settings] in
-            _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps)
+            _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps,
+                 settings.showsMinimizedWindows, settings.showsNowPlaying, settings.showsWeather,
+                 settings.showsClock, settings.widgetOrder, settings.edge)
         } onChange: { [weak self] in
             self?.rebuild()
         }
@@ -127,7 +164,7 @@ final class DockModel {
         let reach = settings.magnifyReach
         let gain = state.gain
         return DockLayout(
-            magnifies: items.map { $0.kind != .separator },
+            items: items.map { $0.spec(for: metrics) },
             metrics: metrics,
             stripLength: state.stripLength,
             pointer: state.pointer,
@@ -165,6 +202,10 @@ final class DockModel {
         var seen = Set(settings.hiddenApps.map { Self.key(URL(fileURLWithPath: $0)) })
         seen.remove(Self.finderID)
         for path in [Self.finderPath] + settings.pinnedApps {
+            if path.hasPrefix(spacerPrefix) {
+                result.append(DockItem(id: path, kind: .spacer, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
+                continue
+            }
             let url = URL(fileURLWithPath: path)
             let id = Self.key(url)
             guard !seen.contains(id), FileManager.default.fileExists(atPath: path) else { continue }
@@ -199,9 +240,83 @@ final class DockModel {
                 name: FileManager.default.displayName(atPath: path), isPinned: true, isRunning: false, pid: nil
             ))
         }
+        for window in minimizedWindows {
+            result.append(DockItem(
+                id: "min:\(window.id)", kind: .minimizedWindow, url: nil, name: window.title,
+                isPinned: false, isRunning: true, pid: window.pid, windowID: window.id))
+        }
         result.append(DockItem(id: "trash", kind: .trash, url: nil, name: "Trash", isPinned: true, isRunning: false, pid: nil))
+        // Bottom only: the widgets are wide, short text tiles, and a side dock's bar is one icon
+        // wide — they would spill across the screen or be crushed to nothing.
+        // Normalized on every read, not just at load: a sync or an import can hand back an order
+        // missing a widget, and a missing one would never show.
+        for name in settings.edge == .bottom ? normalizedWidgetOrder(settings.widgetOrder) : [] {
+            let enabled: Bool
+            let kind: DockItem.Kind
+            switch name {
+            case "nowPlaying": (enabled, kind) = (settings.showsNowPlaying, .nowPlaying)
+            case "weather": (enabled, kind) = (settings.showsWeather, .weather)
+            case "clock": (enabled, kind) = (settings.showsClock, .clock)
+            default: continue
+            }
+            guard enabled else { continue }
+            result.append(DockItem(id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil))
+        }
 
         if result != items { items = result }
+    }
+
+    /// Minimized is each app's own word for it: the windows it lists over Accessibility with
+    /// AXMinimized set. Inferring it from the window server — off screen and on no Space — let
+    /// phantoms through (Teams' shell window and a Rio leftover, measured) and would count whole
+    /// other Desktops on macOS 26. The accepted trade-off: Electron apps list no AX windows at all,
+    /// so their minimized windows get no tile.
+    ///
+    /// Only checked, never prompted for: this runs off a timer, and the prompt belongs to a click.
+    private func refreshMinimizedWindows() {
+        guard settings.showsMinimizedWindows, AXIsProcessTrusted(), let getWindowID = WindowActions.getWindowIDFn
+        else {
+            if !minimizedWindows.isEmpty {
+                minimizedWindows = []
+                rebuild()
+            }
+            return
+        }
+        let me = ProcessInfo.processInfo.processIdentifier
+        var found: [MinimizedWindow] = []
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular && app.processIdentifier != me {
+            let element = AXUIElementCreateApplication(app.processIdentifier)
+            // As in restoreMinimizedWindow: on the main thread, a hung app must not stall the dock
+            // for the default six seconds.
+            AXUIElementSetMessagingTimeout(element, 0.3)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement]
+            else { continue }
+            for window in windows where Self.isMinimized(window) {
+                var id: CGWindowID = 0
+                guard getWindowID(window, &id) == .success, id != 0 else { continue }
+                // The AX title, which needs no Screen Recording, unlike the window server's.
+                let title = Self.string(of: window, kAXTitleAttribute) ?? ""
+                found.append(MinimizedWindow(id: id, pid: app.processIdentifier, title: title))
+            }
+        }
+        let known = Set(minimizedWindows.map(\.identity))
+        guard Set(found.map(\.identity)) != known else { return }
+        let fresh = found.filter { !known.contains($0.identity) }
+        minimizedWindows = found
+        minimizedThumbs = minimizedThumbs.filter { thumb in found.contains { $0.id == thumb.key } }
+        rebuild()
+        // Thumbnails arrive late and only for windows still minimized then.
+        for window in fresh {
+            Task { [weak self] in
+                guard let image = await WindowCapture.windowThumbnail(windowID: window.id, maxHeight: 120)
+                else { return }
+                guard let self, minimizedWindows.contains(where: { $0.identity == window.identity }) else { return }
+                minimizedThumbs[window.id] = NSImage(cgImage: image, size: .zero)
+            }
+        }
     }
 
     func icon(for item: DockItem) -> NSImage {
@@ -252,7 +367,11 @@ final class DockModel {
             if let url = item.url { showStack(url) }
         case .trash:
             NSWorkspace.shared.open(Self.trashURL)
-        case .separator:
+        case .minimizedWindow:
+            if let windowID = item.windowID, let pid = item.pid {
+                WindowActions.raise(windowID, pid: pid)
+            }
+        case .separator, .spacer, .nowPlaying, .weather, .clock:
             break
         }
     }
@@ -376,9 +495,36 @@ final class DockModel {
             settings.pinnedApps.removeAll { Self.key(URL(fileURLWithPath: $0)) == item.id }
         case .folder:
             settings.stacks.removeAll { "folder:" + $0 == item.id }
-        case .trash, .separator:
+        case .spacer:
+            settings.pinnedApps.removeAll { $0 == item.id }
+        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock:
             return
         }
+    }
+
+    /// Reorders the widgets: `name` lands before `target`, or at the end. Pure, for the tests.
+    nonisolated static func reordered(_ order: [String], moving name: String, before target: String?) -> [String] {
+        var out = order.filter { $0 != name }
+        if let target, let index = out.firstIndex(of: target) {
+            out.insert(name, at: index)
+        } else {
+            out.append(name)
+        }
+        return out
+    }
+
+    private static let widgetIDPrefix = "widget:"
+
+    func placeWidget(_ name: String, before target: DockItem?) {
+        let targetName = target.flatMap { item -> String? in
+            item.id.hasPrefix(Self.widgetIDPrefix) ? String(item.id.dropFirst(Self.widgetIDPrefix.count)) : nil
+        }
+        guard name != targetName else { return }
+        settings.widgetOrder = Self.reordered(settings.widgetOrder, moving: name, before: targetName)
+    }
+
+    func addSpacer() {
+        settings.addSpacer()
     }
 
     func emptyTrash() {
@@ -416,14 +562,19 @@ final class DockModel {
     /// Pins the app at `path` immediately before `target`, or at the end of the pinned apps. Moving an
     /// already pinned app is the same operation: take it out, put it back in.
     func place(_ path: String, before target: DockItem?) {
-        let id = Self.key(URL(fileURLWithPath: path))
-        guard path.hasSuffix(".app"), id != Self.finderID, id != target?.id else { return }
-        var pinned = settings.pinnedApps.filter { Self.key(URL(fileURLWithPath: $0)) != id }
+        let isSpacer = path.hasPrefix(spacerPrefix)
+        let id = isSpacer ? path : Self.key(URL(fileURLWithPath: path))
+        guard path.hasSuffix(".app") || isSpacer, id != Self.finderID, id != target?.id else { return }
+        var pinned = settings.pinnedApps.filter {
+            ($0.hasPrefix(spacerPrefix) ? $0 : Self.key(URL(fileURLWithPath: $0))) != id
+        }
         var index = pinned.count
-        if let target, target.kind == .app, target.isPinned {
+        if let target, target.kind == .app || target.kind == .spacer, target.isPinned {
             if target.id == Self.finderID {
                 index = 0
-            } else if let found = pinned.firstIndex(where: { Self.key(URL(fileURLWithPath: $0)) == target.id }) {
+            } else if let found = pinned.firstIndex(where: {
+                ($0.hasPrefix(spacerPrefix) ? $0 : Self.key(URL(fileURLWithPath: $0))) == target.id
+            }) {
                 index = found
             }
         }
@@ -436,6 +587,17 @@ final class DockModel {
     // MARK: - Drag and drop
 
     func dragPayload(for item: DockItem) -> NSItemProvider {
+        // Spacers and widgets drag by their identity strings, exactly as an app drags by its path.
+        if item.kind == .spacer || item.id.hasPrefix(Self.widgetIDPrefix) {
+            let provider = NSItemProvider()
+            let payload = Data(item.id.utf8)
+            provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .ownProcess) {
+                completion in
+                completion(payload, nil)
+                return nil
+            }
+            return provider
+        }
         guard item.kind == .app, item.id != Self.finderID, let url = item.url else { return NSItemProvider() }
         let provider = NSItemProvider()
         let data = Data(url.path.utf8)
@@ -455,7 +617,13 @@ final class DockModel {
             }) else { return false }
             _ = provider.loadDataRepresentation(forTypeIdentifier: dragType.identifier) { [weak self] data, _ in
                 guard let data, let path = String(data: data, encoding: .utf8) else { return }
-                Task { @MainActor in self?.place(path, before: target) }
+                Task { @MainActor in
+                    if path.hasPrefix(Self.widgetIDPrefix) {
+                        self?.placeWidget(String(path.dropFirst(Self.widgetIDPrefix.count)), before: target)
+                    } else {
+                        self?.place(path, before: target)
+                    }
+                }
             }
             return true
         }

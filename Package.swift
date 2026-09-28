@@ -7,9 +7,16 @@ let package = Package(
     // (`glassEffect`), which exists nowhere earlier. The string form because `.v26` needs tools 6.2
     // and nothing else here does.
     platforms: [.macOS("26.0")],
+    dependencies: [
+        // Updates. Distributed as a binary XCFramework, so build.sh has to copy it into
+        // Contents/Frameworks, add an rpath, and sign it before the app — see the comments there.
+        // At least the version Cmd-Tab and FinderPlus ship.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.5"),
+    ],
     targets: [
         .executableTarget(
             name: "DockIt",
+            dependencies: [.product(name: "Sparkle", package: "Sparkle")],
             path: "Sources/DockIt",
             // Swift 6 language mode. Everything DockIt does happens on the main actor — the panel,
             // NSWorkspace notifications, a main-run-loop pointer timer — so strict checking costs

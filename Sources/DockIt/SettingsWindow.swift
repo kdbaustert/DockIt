@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - Tabs
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, appearance, interactions, applications, stacks, about
+    case general, appearance, widgets, interactions, applications, stacks, about
 
     var id: String { rawValue }
 
@@ -17,7 +17,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     /// bookends on their own.
     static let groups: [(header: String?, tabs: [SettingsTab])] = [
         (nil, [.general]),
-        ("Dock", [.appearance, .interactions, .applications, .stacks]),
+        ("Dock", [.appearance, .widgets, .interactions, .applications, .stacks]),
         (nil, [.about]),
     ]
 
@@ -25,6 +25,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .appearance: "Appearance"
+        case .widgets: "Widgets"
         case .interactions: "Interactions"
         case .applications: "Applications"
         case .stacks: "Stacks"
@@ -37,6 +38,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: (Color(hex: "#8E8E93")!, Color(hex: "#6C6C70")!)
         case .appearance: (Color(hex: "#FF8A5B")!, Color(hex: "#E0532B")!)
+        case .widgets: (Color(hex: "#FFC53D")!, Color(hex: "#E09A00")!)
         case .interactions: (Color(hex: "#A96BFF")!, Color(hex: "#6B2FD6")!)
         case .applications: (Color(hex: "#5BC8A8")!, Color(hex: "#17916F")!)
         case .stacks: (Color(hex: "#3F8CFF")!, Color(hex: "#1B5FD9")!)
@@ -49,6 +51,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape.2.fill"
         case .appearance: "swatchpalette.fill"
+        case .widgets: "widget.small"
         case .interactions: "cursorarrow.motionlines"
         case .applications: "square.grid.3x3.fill"
         case .stacks: "folder.fill"
@@ -63,6 +66,12 @@ private enum SettingsAnchor {
     static let macOSDock = "general.macOSDock"
     static let autoHide = "interactions.autoHide"
     static let display = "general.display"
+    static let permissions = "general.permissions"
+    static let updates = "general.updates"
+    static let widgets = "widgets.widgets"
+    static let spacers = "widgets.spacers"
+    static let theme = "appearance.theme"
+    static let windows = "interactions.windows"
     static let iCloud = "general.iCloud"
     static let backup = "general.backup"
     static let position = "appearance.position"
@@ -102,6 +111,24 @@ private enum SettingsIndex {
              ["login", "launch", "boot", "autostart", "startup"]),
         item("hideSystemDock", .general, SettingsAnchor.macOSDock, "macOS Dock", "Hide the macOS Dock",
              ["system dock", "apple dock", "restore", "replace"]),
+        item("permissions", .general, SettingsAnchor.permissions, "Permissions", "Screen Recording and Accessibility",
+             ["permission", "screen recording", "accessibility", "granted", "privacy"]),
+        item("betaUpdates", .general, SettingsAnchor.updates, "Updates", "Receive beta updates",
+             ["update", "beta", "sparkle", "version", "check"]),
+        item("nowPlayingWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Now playing",
+             ["music", "spotify", "track", "widget", "now playing"]),
+        item("weatherWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Weather",
+             ["weather", "temperature", "forecast", "widget", "location"]),
+        item("clockWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Clock",
+             ["clock", "time", "date", "widget", "24"]),
+        item("spacers", .widgets, SettingsAnchor.spacers, "Spacers", "Add or remove spacers",
+             ["spacer", "space", "gap", "spacing", "remove", "add"]),
+        item("theme", .appearance, SettingsAnchor.theme, "Theme", "Bar tint",
+             ["theme", "tint", "color", "colour", "corner", "shadow", "dots"]),
+        item("minimized", .interactions, SettingsAnchor.windows, "Windows", "Show minimized windows in the dock",
+             ["minimized", "minimize", "windows", "tiles"]),
+        item("livePreviews", .interactions, SettingsAnchor.previews, "Window previews", "Live previews",
+             ["live", "preview", "refresh", "video"]),
         item("iCloudSync", .general, SettingsAnchor.iCloud, "iCloud", "Sync settings with iCloud",
              ["icloud", "sync", "cloud", "other macs", "share"]),
         item("export", .general, SettingsAnchor.backup, "Backup", "Export settings",
@@ -318,6 +345,7 @@ private struct SettingsRootView: View {
         switch tab {
         case .general: GeneralPane(settings: settings)
         case .appearance: AppearancePane(settings: settings)
+        case .widgets: WidgetsPane(settings: settings)
         case .interactions: InteractionsPane(settings: settings)
         case .applications: ApplicationsPane(settings: settings)
         case .stacks: StacksPane(settings: settings)
@@ -328,8 +356,39 @@ private struct SettingsRootView: View {
 
 // MARK: - Panes
 
+/// Both readable without prompting; re-read on a slow beat while the pane is up, so granting in
+/// System Settings shows here without restarting anything.
+private struct PermissionsState: Equatable {
+    var screenRecording = CGPreflightScreenCaptureAccess()
+    var accessibility = AXIsProcessTrusted()
+}
+
+private struct PermissionRow: View {
+    let title: String
+    let granted: Bool
+    let pane: String
+
+    var body: some View {
+        SettingsRow(title: title) {
+            HStack(spacing: 8) {
+                Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(granted ? .green : .orange)
+                Text(granted ? "Granted" : "Not granted")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                if !granted {
+                    Button("Open System Settings…") {
+                        if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private struct GeneralPane: View {
     @Bindable var settings: DockSettings
+    @State private var permissions = PermissionsState()
     @State private var opensAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
     /// Set while a failed change puts the toggle back, so that `onChange` does not answer the reset by
@@ -390,6 +449,28 @@ private struct GeneralPane: View {
                 }
             }
             SettingsSection(
+                title: "Permissions", anchor: SettingsAnchor.permissions,
+                footer: "Previews picture other apps' windows (Screen Recording); restoring and closing windows steers them (Accessibility)."
+            ) {
+                PermissionRow(
+                    title: "Screen Recording", granted: permissions.screenRecording,
+                    pane: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                PermissionRow(
+                    title: "Accessibility", granted: permissions.accessibility,
+                    pane: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            }
+            SettingsSection(
+                title: "Updates", anchor: SettingsAnchor.updates,
+                footer: Updater.isConfigured
+                    ? "Updates come from GitHub releases. Check from the menu bar icon."
+                    : "This is a local development build; it does not update itself."
+            ) {
+                SettingsToggle(
+                    title: "Receive beta updates",
+                    isOn: Binding(get: { UpdateChannels.receivesBetas }, set: { UpdateChannels.receivesBetas = $0 }))
+                    .disabled(!Updater.isConfigured)
+            }
+            SettingsSection(
                 title: "iCloud", anchor: SettingsAnchor.iCloud,
                 footer: SettingsSync.isAvailable
                     ? "Every Mac signed in to your iCloud account with this on shares one set of settings, kept in iCloud Drive ▸ DockIt. Hiding the macOS Dock stays per Mac."
@@ -408,6 +489,12 @@ private struct GeneralPane: View {
                         Button("Import…") { SettingsFile.importInto(settings) }
                     }
                 }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                permissions = PermissionsState()
+                try? await Task.sleep(for: .seconds(2))
             }
         }
         .onChange(of: opensAtLogin) { _, on in
@@ -438,6 +525,136 @@ private struct GeneralPane: View {
     }
 }
 
+private struct WidgetsPane: View {
+    @Bindable var settings: DockSettings
+
+    var body: some View {
+        SettingsPage(title: "Widgets", subtitle: "Add widgets and spacers to the dock, or take them off.") {
+            SettingsSection(
+                title: "Widgets", anchor: SettingsAnchor.widgets,
+                footer: "Widgets sit at the end of the bar, beside the Trash. Right-click one in the dock to remove it. Widgets show when the dock is at the bottom."
+            ) {
+                SettingsToggle(
+                    title: "Now playing",
+                    subtitle: "The current Spotify or Music track, with artwork. Click to play or pause. macOS asks permission to control each player once.",
+                    isOn: $settings.showsNowPlaying)
+                SettingsToggle(title: "Weather", isOn: $settings.showsWeather)
+                WeatherLocationRow(settings: settings)
+                    .disabled(!settings.showsWeather)
+                SettingsToggle(title: "Fahrenheit", isOn: $settings.weatherFahrenheit)
+                    .disabled(!settings.showsWeather)
+                SettingsToggle(title: "Clock", isOn: $settings.showsClock)
+                SettingsToggle(title: "24-hour time", isOn: $settings.clock24Hour)
+                    .disabled(!settings.showsClock)
+            }
+            SettingsSection(
+                title: "Spacers", anchor: SettingsAnchor.spacers,
+                footer: "A spacer is added after the pinned apps; drag it to where you want the gap. Right-click one in the dock to remove just that one."
+            ) {
+                SettingsRow(
+                    title: "Spacers on the dock",
+                    subtitle: settings.spacerCount == 0 ? "None." : "\(settings.spacerCount) on the dock."
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Add Spacer") { settings.addSpacer() }
+                        Button("Remove All") { settings.removeAllSpacers() }
+                            .disabled(settings.spacerCount == 0)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Commits on Return or when the field loses focus, not per keystroke: every change to the setting
+/// is a geocode and a forecast, and each half-typed name ("L", "Lo", "Lon"…) would fetch a real
+/// place's weather and show it.
+private struct WeatherLocationRow: View {
+    @Bindable var settings: DockSettings
+    @State private var draft = ""
+    @FocusState private var isFocused: Bool
+    @State private var hits: [WidgetsModel.City] = []
+    @State private var searchTask: Task<Void, Never>?
+
+    var body: some View {
+        Group {
+            SettingsRow(title: "Weather location", subtitle: "Type to search for a city.") {
+                TextField("City", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .focused($isFocused)
+                    .onSubmit(commit)
+                    .onChange(of: isFocused) { _, focused in
+                        if !focused { commit() }
+                    }
+            }
+            // Matches straight from the geocoder, so the pick pins exact coordinates — the search
+            // is what disambiguates the world's many Springfields.
+            ForEach(hits) { city in
+                Button {
+                    choose(city)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "location.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Text(city.label).font(.system(size: 12))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, SettingsChrome.rowInset)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .settingsRowDivider()
+            }
+        }
+        .onAppear { draft = settings.weatherLocation }
+        // Switching tabs mid-edit removes the field without a focus change.
+        .onDisappear(perform: commit)
+        // A change from elsewhere — sync, an import — shows, unless it would overwrite typing.
+        .onChange(of: settings.weatherLocation) { _, location in
+            if !isFocused { draft = location }
+        }
+        .onChange(of: draft) { _, text in
+            searchTask?.cancel()
+            let query = text.trimmingCharacters(in: .whitespaces)
+            guard isFocused, query.count >= 2, query != settings.weatherLocation else {
+                hits = []
+                return
+            }
+            searchTask = Task {
+                // Debounced: two keystrokes in 300 ms cost one request.
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                let found = await WidgetsModel.searchCities(query)
+                guard !Task.isCancelled else { return }
+                hits = found
+            }
+        }
+    }
+
+    private func choose(_ city: WidgetsModel.City) {
+        searchTask?.cancel()
+        hits = []
+        draft = city.label
+        settings.weatherLocation = city.label
+        settings.weatherLatitude = city.latitude
+        settings.weatherLongitude = city.longitude
+        isFocused = false
+    }
+
+    /// Return with no pick: the typed name stands, and clearing the pin sends it to the geocoder.
+    private func commit() {
+        searchTask?.cancel()
+        hits = []
+        guard draft != settings.weatherLocation else { return }
+        settings.weatherLocation = draft
+        settings.weatherLatitude = 0
+        settings.weatherLongitude = 0
+    }
+}
+
 private struct AppearancePane: View {
     @Bindable var settings: DockSettings
 
@@ -461,6 +678,30 @@ private struct AppearancePane: View {
                 SettingsSlider(
                     title: "Dock padding", subtitle: "Space between the icons and the edge of the bar.",
                     value: $settings.dockPadding, range: 0...24)
+            }
+            SettingsSection(title: "Theme", anchor: SettingsAnchor.theme) {
+                SettingsRow(title: "Bar tint", subtitle: "A colour washed over the glass. Reset returns to plain glass.") {
+                    HStack(spacing: 8) {
+                        ColorPicker("", selection: Binding(
+                            get: { Color(hex: settings.barTint) ?? .clear },
+                            set: { settings.barTint = $0.hexString ?? settings.barTint }
+                        ), supportsOpacity: false)
+                        .labelsHidden()
+                        Button("Reset") { settings.barTint = "" }
+                            .disabled(settings.barTint.isEmpty)
+                    }
+                }
+                SettingsSlider(
+                    title: "Tint intensity",
+                    value: $settings.barTintIntensity, range: 0...60,
+                    format: { "\(Int($0))%" })
+                    .disabled(settings.barTint.isEmpty)
+                SettingsSlider(title: "Corner radius", value: $settings.barCornerRadius, range: 8...24)
+                SettingsToggle(title: "Icon shadows", isOn: $settings.iconShadows)
+                SettingsToggle(
+                    title: "Running app dots",
+                    subtitle: "A small dot under each running app.",
+                    isOn: $settings.showsRunningDots)
             }
         }
     }
@@ -556,6 +797,20 @@ private struct InteractionsPane: View {
                     subtitle: "A title and close button on each preview.",
                     isOn: $settings.previewShowsControls)
                     .disabled(!settings.showsWindowPreviews)
+                SettingsToggle(
+                    title: "Live previews",
+                    subtitle: "The open panel keeps refreshing its thumbnails.",
+                    isOn: $settings.livePreviews)
+                    .disabled(!settings.showsWindowPreviews)
+            }
+            SettingsSection(
+                title: "Windows", anchor: SettingsAnchor.windows,
+                // Read at render, not polled: the pane is rebuilt each time the tab is opened, which
+                // is when someone coming back from General ▸ Permissions would look.
+                footer: "Minimized windows appear as their own tiles beside the Trash, as in the macOS Dock."
+                    + (AXIsProcessTrusted() ? "" : " Needs Accessibility — see General ▸ Permissions.")
+            ) {
+                SettingsToggle(title: "Show minimized windows in the dock", isOn: $settings.showsMinimizedWindows)
             }
         }
     }
@@ -565,15 +820,18 @@ private struct ApplicationsPane: View {
     @Bindable var settings: DockSettings
 
     var body: some View {
+        // Spacers share `pinnedApps` but are managed from the dock and Widgets ▸ Spacers; listed
+        // here they would be rows with no icon and a meaningless "spacer:<uuid>" path.
+        let apps = settings.pinnedApps.filter { !$0.hasPrefix(spacerPrefix) }
         SettingsPage(title: "Applications", subtitle: "Drag icons in the dock to reorder them, or drop apps onto it.") {
             SettingsSection(
                 title: "Pinned apps", anchor: SettingsAnchor.pinned,
                 footer: "Finder is always first and cannot be removed."
             ) {
-                if settings.pinnedApps.isEmpty {
+                if apps.isEmpty {
                     SettingsWideRow(subtitle: "No pinned apps.") { EmptyView() }
                 }
-                ForEach(settings.pinnedApps, id: \.self) { path in
+                ForEach(apps, id: \.self) { path in
                     ItemRow(path: path) { settings.pinnedApps.removeAll { $0 == path } }
                 }
                 SettingsRow(title: "Add an application") {

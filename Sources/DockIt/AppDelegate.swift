@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 
 @main
 @MainActor
@@ -21,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarItem: MenuBarItem?
     private var settingsSync: SettingsSync?
     private var watchdog: Timer?
+    /// Answers Sparkle's "which channels?" before each check. Held here because Sparkle keeps only
+    /// a weak reference to its delegate.
+    private let updateChannels = UpdateChannels()
+    /// nil in a build with no feed (every plain `build.sh` build), where an updater could only fail.
+    private var updater: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = DockModel(settings: settings)
@@ -37,7 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.rebuildControllers() }
         }
-        menuBarItem = MenuBarItem(settings: settings)
+        // `startingUpdater: true` starts the scheduled daily check (SUEnableAutomaticChecks).
+        if Updater.isConfigured {
+            updater = SPUStandardUpdaterController(
+                startingUpdater: true, updaterDelegate: updateChannels, userDriverDelegate: nil)
+        }
+        menuBarItem = MenuBarItem(settings: settings, updater: updater)
         settingsSync = SettingsSync(settings: settings)
         if settings.hidesSystemDock { SystemDock.hide() }
         // The Dock's preferences are not DockIt's to keep. Something else rewrote them within an hour
@@ -75,8 +86,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Asks whether to bring the macOS Dock back. Not at logout or shutdown: nobody is there to
     /// answer, and restoring would flash the system Dock at the next login before DockIt hid it again.
+    /// Nor for an update's relaunch, for the same reason: the new copy starts at once and hides the
+    /// Dock again from the saved originals, which stay in place.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard settings.hidesSystemDock, !Self.isSystemQuit() else { return .terminateNow }
+        guard settings.hidesSystemDock, !Self.isSystemQuit(), !updateChannels.isRelaunchingForUpdate else {
+            return .terminateNow
+        }
 
         let alert = NSAlert()
         alert.messageText = "Restore the macOS Dock?"

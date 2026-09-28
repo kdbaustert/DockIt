@@ -126,7 +126,7 @@ enum WindowCapture {
 
     /// Whether the window server has the window on any Desktop. 0x7 asks for every kind of Space.
     /// Unreadable counts as "yes": better a phantom thumbnail than real windows vanishing.
-    private nonisolated static func isOnSomeSpace(_ windowID: CGWindowID) -> Bool {
+    nonisolated static func isOnSomeSpace(_ windowID: CGWindowID) -> Bool {
         guard let mainConnection, let copySpacesForWindows else { return true }
         guard let spaces = copySpacesForWindows(
             mainConnection(), 0x7, [NSNumber(value: windowID)] as CFArray)?.takeRetainedValue()
@@ -150,6 +150,18 @@ enum WindowCapture {
             if getWindowID(window, &id) == .success, id != 0 { out.insert(id) }
         }
         return out
+    }
+
+    /// One window's snapshot by id — the minimized-window tiles use it, where there is no pid-wide
+    /// capture to share.
+    nonisolated static func windowThumbnail(windowID: CGWindowID, maxHeight: CGFloat) async -> CGImage? {
+        guard let content = try? await SCShareableContent
+            .excludingDesktopWindows(true, onScreenWindowsOnly: false),
+            let window = content.windows.first(where: { $0.windowID == windowID })
+        else { return nil }
+        // A blank capture is no picture; nil keeps the tile on its app-icon fallback.
+        guard let image = await capture(window, maxHeight: maxHeight), !isBlank(image) else { return nil }
+        return image
     }
 
     /// Captured straight at thumbnail size rather than scaled afterwards.

@@ -11,6 +11,16 @@ struct DockMetrics: Equatable {
     var thickness: CGFloat { iconSize + 2 * padding }
 }
 
+/// One item's shape in the bar: its resting along-size, and whether it grows under the pointer.
+/// Icons magnify; separators, spacers and the widget tiles keep their own fixed widths.
+struct DockItemSpec: Equatable {
+    var resting: CGFloat
+    var magnifies: Bool
+
+    static func icon(_ m: DockMetrics) -> DockItemSpec { .init(resting: m.iconSize, magnifies: true) }
+    static func fixed(_ size: CGFloat) -> DockItemSpec { .init(resting: size, magnifies: false) }
+}
+
 /// Where the bar and each item sit along the edge, for one pointer position. Pure geometry, so the
 /// view, the panel's hit-testing and the tests all agree on it.
 struct DockLayout: Equatable {
@@ -20,21 +30,26 @@ struct DockLayout: Equatable {
     let start: CGFloat
     /// Bar length, padding included.
     let length: CGFloat
+    /// Across-axis extent of the tallest item, padding excluded — how far the bar reaches off the
+    /// edge. Not `sizes.max()`: those are along-axis widths, and a widget tile is far wider than it
+    /// is tall. Icons are square, so a magnifying item is as tall as it is wide; everything else is
+    /// a resting icon tall whatever its width.
+    let depth: CGFloat
     let metrics: DockMetrics
 
     /// - Parameters:
-    ///   - magnifies: one entry per item; `false` for separators, which never grow.
+    ///   - items: each item's resting size and whether it magnifies.
     ///   - pointer: along-axis pointer position within the strip, or nil when not hovering.
     ///   - falloff: growth for a pointer `distance` from an icon's centre, 0...1.
     init(
-        magnifies: [Bool],
+        items: [DockItemSpec],
         metrics m: DockMetrics,
         stripLength: CGFloat,
         pointer: CGFloat?,
         falloff: (_ distance: CGFloat, _ iconSize: CGFloat) -> CGFloat
     ) {
         metrics = m
-        let resting = magnifies.map { $0 ? m.iconSize : m.separatorExtent }
+        let resting = items.map(\.resting)
         let restingLength = Self.length(of: resting, metrics: m)
         let restingStart = (stripLength - restingLength) / 2
 
@@ -42,6 +57,7 @@ struct DockLayout: Equatable {
             sizes = resting
             start = restingStart
             length = restingLength
+            depth = m.iconSize
             return
         }
 
@@ -52,12 +68,13 @@ struct DockLayout: Equatable {
         for index in resting.indices {
             let centre = cursor + resting[index] / 2
             cursor += resting[index] + m.spacing
-            guard magnifies[index] else { continue }
+            guard items[index].magnifies else { continue }
             let growth = min(max(falloff(abs(pointer - centre), m.iconSize), 0), 1)
-            grown[index] = m.iconSize + (m.magnifiedSize - m.iconSize) * growth
+            grown[index] = items[index].resting + (m.magnifiedSize - m.iconSize) * growth
         }
         sizes = grown
         length = Self.length(of: grown, metrics: m)
+        depth = zip(grown, items).filter { $0.1.magnifies }.map(\.0).reduce(m.iconSize, max)
 
         // Keep whatever is under the pointer under it. Centring the grown row instead makes the
         // icons slide away from the pointer toward the bar's ends, so the one you are aiming for
