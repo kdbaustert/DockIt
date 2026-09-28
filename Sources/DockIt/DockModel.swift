@@ -187,10 +187,14 @@ final class DockModel {
 
     func rebuild() {
         let me = ProcessInfo.processInfo.processIdentifier
+        let myBundleID = Bundle.main.bundleIdentifier
         let all = NSWorkspace.shared.runningApplications
         lastRunningSignature = Self.runningSignature(all)
+        // By bundle as well as pid: the now-playing poll's osascript children register under
+        // DockIt's bundle as regular apps, and each flashed a tile for its tenth of a second.
         let running = all.filter {
             $0.activationPolicy == .regular && $0.processIdentifier != me
+                && (myBundleID == nil || $0.bundleIdentifier != myBundleID)
         }
         var runningByID: [String: NSRunningApplication] = [:]
         for app in running {
