@@ -186,7 +186,6 @@ private struct DockItemMenu: View {
         switch item.kind {
         case .app:
             if item.isRunning && item.id != DockModel.finderID {
-                Button("Hide") { model.hide(item) }
                 Button("Quit") { model.quit(item) }
                 Button("Force Quit") { model.forceQuit(item) }
                 Divider()

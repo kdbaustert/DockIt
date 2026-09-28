@@ -468,7 +468,6 @@ final class DockModel {
         launching.remove(id)
     }
 
-    func hide(_ item: DockItem) { runningApp(item)?.hide() }
     func quit(_ item: DockItem) { runningApp(item)?.terminate() }
     func forceQuit(_ item: DockItem) { runningApp(item)?.forceTerminate() }
 
