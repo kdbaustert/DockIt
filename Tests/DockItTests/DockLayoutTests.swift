@@ -48,6 +48,13 @@ final class DockLayoutTests: XCTestCase {
         XCTAssertEqual(beyond.start, atEnd.start, accuracy: 0.01)
     }
 
+    func testCenterMatchesIndex() {
+        // Resting row starts at 430 (see testRestingRowIsCentred); first icon spans 435...475.
+        let layout = DockLayout(magnifies: [true, true, false, true], metrics: metrics, stripLength: 1000, pointer: nil) { _, _ in 1 }
+        XCTAssertEqual(layout.center(of: 0), 455)
+        XCTAssertEqual(layout.index(at: layout.center(of: 3)), 3)
+    }
+
     func testIndexOutsideRowIsNil() {
         let layout = DockLayout(magnifies: [true], metrics: metrics, stripLength: 1000, pointer: nil) { _, _ in 0 }
         XCTAssertNil(layout.index(at: 0))

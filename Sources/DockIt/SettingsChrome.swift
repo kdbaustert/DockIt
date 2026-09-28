@@ -222,7 +222,9 @@ struct SettingsSlider: View {
                 Text(format?(value) ?? "\(Int(value))")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, alignment: .trailing)
+                    // Natural width, one line: "2.0 icons" wrapped to three lines in a fixed 30pt.
+                    .fixedSize()
+                    .frame(minWidth: 30, alignment: .trailing)
                     .accessibilityHidden(true)
             }
             .accessibilityValue(format?(value) ?? "\(Int(value)) points")

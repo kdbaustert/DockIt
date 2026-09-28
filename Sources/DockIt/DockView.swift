@@ -2,12 +2,13 @@ import SwiftUI
 
 struct DockView: View {
     let model: DockModel
+    let state: PanelState
     let settings: DockSettings
 
     var body: some View {
         let metrics = model.metrics
-        let layout = model.layout
-        let hovered = model.pointer.flatMap(layout.index(at:))
+        let layout = model.layout(for: state)
+        let hovered = state.pointer.flatMap(layout.index(at:))
         let edge = settings.edge
         let horizontal = edge == .bottom
         let row = horizontal
@@ -41,7 +42,7 @@ struct DockView: View {
             .padding(edge.screenEdge, metrics.padding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
-        .offset(model.isHidden ? edge.hiddenOffset(metrics.thickness + 8) : .zero)
+        .offset(state.isHidden ? edge.hiddenOffset(metrics.thickness + 8) : .zero)
     }
 }
 

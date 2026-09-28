@@ -6,14 +6,14 @@ import CoreGraphics
 ///
 /// `iconSize` is the resting size in points — scale the reach by it, so the same number of
 /// neighbours swell whether the dock is set small or large.
-func magnificationFalloff(distance: CGFloat, iconSize: CGFloat) -> CGFloat {
+func magnificationFalloff(distance: CGFloat, iconSize: CGFloat, reachIcons: CGFloat = 2.0) -> CGFloat {
     // A raised cosine: flat at the peak, so the icon under the pointer does not twitch as the pointer
     // crosses it, and flat again where it reaches zero, so the outermost neighbours ease in rather
     // than starting to grow with a visible kink. Linear has a kink at both; a Gaussian never quite
     // reaches zero, so every icon on the bar would shimmer.
-    // Two icon widths, matched to DockFix (measured 2026-09-28: at rest the hovered icon's direct
-    // neighbour swells about 1.2x and the next one out not at all).
-    let reach = iconSize * 2.0
+    // Defaults to two icon widths, matched to DockFix (measured 2026-09-28: the hovered icon's
+    // direct neighbour swells about 1.2x and the next one out not at all). The Reach setting scales it.
+    let reach = iconSize * max(reachIcons, 0.5)
     guard distance < reach else { return 0 }
     return (1 + cos(.pi * distance / reach)) / 2
 }

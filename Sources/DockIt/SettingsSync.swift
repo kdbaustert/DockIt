@@ -11,11 +11,18 @@ struct PortableSettings: Codable, Equatable {
     var iconPadding: Double?
     var dockPadding: Double?
     var magnifies: Bool?
+    var magnifyAmount: Double?
+    var magnifyReach: Double?
+    var magnifyOnApproach: Bool?
+    /// The pre-amount schema: a magnified size in points. Read so an old file still applies.
     var magnifiedSize: Double?
     var smoothHover: Bool?
     var hoverIntensity: Double?
     var bouncesOnLaunch: Bool?
     var autoHides: Bool?
+    var showsWindowPreviews: Bool?
+    var previewDelay: Double?
+    var previewShowsControls: Bool?
     var showsMenuBarIcon: Bool?
     var pinnedApps: [String]?
     var stacks: [String]?
@@ -38,8 +45,11 @@ extension DockSettings {
     var portable: PortableSettings {
         PortableSettings(
             edge: edge.rawValue, iconSize: iconSize, iconPadding: iconPadding, dockPadding: dockPadding,
-            magnifies: magnifies, magnifiedSize: magnifiedSize, smoothHover: smoothHover,
+            magnifies: magnifies, magnifyAmount: magnifyAmount, magnifyReach: magnifyReach,
+            magnifyOnApproach: magnifyOnApproach, smoothHover: smoothHover,
             hoverIntensity: hoverIntensity, bouncesOnLaunch: bouncesOnLaunch, autoHides: autoHides,
+            showsWindowPreviews: showsWindowPreviews, previewDelay: previewDelay,
+            previewShowsControls: previewShowsControls,
             showsMenuBarIcon: showsMenuBarIcon, pinnedApps: pinnedApps, stacks: stacks, hiddenApps: hiddenApps
         )
     }
@@ -52,11 +62,21 @@ extension DockSettings {
         if let v = p.iconPadding, v != iconPadding { iconPadding = v }
         if let v = p.dockPadding, v != dockPadding { dockPadding = v }
         if let v = p.magnifies, v != magnifies { magnifies = v }
-        if let v = p.magnifiedSize, v != magnifiedSize { magnifiedSize = v }
+        if let v = p.magnifyAmount, v != magnifyAmount { magnifyAmount = v }
+        // An old export carries points; a current one carries the multiple, which wins.
+        if p.magnifyAmount == nil, let v = p.magnifiedSize, iconSize > 0 {
+            let amount = min(max(v / iconSize, 1.0), 2.5)
+            if amount != magnifyAmount { magnifyAmount = amount }
+        }
+        if let v = p.magnifyReach, v != magnifyReach { magnifyReach = v }
+        if let v = p.magnifyOnApproach, v != magnifyOnApproach { magnifyOnApproach = v }
         if let v = p.smoothHover, v != smoothHover { smoothHover = v }
         if let v = p.hoverIntensity, v != hoverIntensity { hoverIntensity = v }
         if let v = p.bouncesOnLaunch, v != bouncesOnLaunch { bouncesOnLaunch = v }
         if let v = p.autoHides, v != autoHides { autoHides = v }
+        if let v = p.showsWindowPreviews, v != showsWindowPreviews { showsWindowPreviews = v }
+        if let v = p.previewDelay, v != previewDelay { previewDelay = v }
+        if let v = p.previewShowsControls, v != previewShowsControls { previewShowsControls = v }
         if let v = p.showsMenuBarIcon, v != showsMenuBarIcon { showsMenuBarIcon = v }
         if let v = p.pinnedApps, v != pinnedApps { pinnedApps = v }
         if let v = p.stacks, v != stacks { stacks = v }
@@ -149,7 +169,14 @@ final class SettingsSync {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Turning sync on adopts what another Mac already put there; only an empty iCloud gets this
         // Mac's settings.
-        if !readRemote() { writeNow() }
+        if !readRemote() {
+            writeNow()
+        } else {
+            // Rewrite what was adopted in the current schema. Without this, a file from an older
+            // DockIt is re-adopted at every launch and its converted values stomp any change made
+            // since — measured: an old "magnifiedSize" file reset the Amount slider on each launch.
+            scheduleWrite()
+        }
         watch(folder)
         let poll = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.readRemote() }

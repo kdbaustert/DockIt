@@ -84,6 +84,16 @@ struct DockLayout: Equatable {
         start = length <= stripLength ? min(max(anchored, 0), stripLength - length) : anchored
     }
 
+    /// The along-axis centre of an item — where a preview panel anchors.
+    func center(of index: Int) -> CGFloat {
+        var cursor = start + metrics.padding
+        for (i, size) in sizes.enumerated() {
+            if i == index { return cursor + size / 2 }
+            cursor += size + metrics.spacing
+        }
+        return cursor
+    }
+
     /// The item whose extent, plus half the gap on either side, contains `along`.
     func index(at along: CGFloat) -> Int? {
         var cursor = start + metrics.padding

@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - Tabs
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, appearance, applications, stacks, about
+    case general, appearance, interactions, applications, stacks, about
 
     var id: String { rawValue }
 
@@ -17,7 +17,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     /// bookends on their own.
     static let groups: [(header: String?, tabs: [SettingsTab])] = [
         (nil, [.general]),
-        ("Dock", [.appearance, .applications, .stacks]),
+        ("Dock", [.appearance, .interactions, .applications, .stacks]),
         (nil, [.about]),
     ]
 
@@ -25,6 +25,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .appearance: "Appearance"
+        case .interactions: "Interactions"
         case .applications: "Applications"
         case .stacks: "Stacks"
         case .about: "About"
@@ -36,6 +37,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: (Color(hex: "#8E8E93")!, Color(hex: "#6C6C70")!)
         case .appearance: (Color(hex: "#FF8A5B")!, Color(hex: "#E0532B")!)
+        case .interactions: (Color(hex: "#A96BFF")!, Color(hex: "#6B2FD6")!)
         case .applications: (Color(hex: "#5BC8A8")!, Color(hex: "#17916F")!)
         case .stacks: (Color(hex: "#3F8CFF")!, Color(hex: "#1B5FD9")!)
         case .about: (Color(hex: "#B8B8BE")!, Color(hex: "#95959B")!)
@@ -47,6 +49,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape.2.fill"
         case .appearance: "swatchpalette.fill"
+        case .interactions: "cursorarrow.motionlines"
         case .applications: "square.grid.3x3.fill"
         case .stacks: "folder.fill"
         case .about: "info.circle.fill"
@@ -59,12 +62,14 @@ private enum SettingsAnchor {
     static let startup = "general.startup"
     static let macOSDock = "general.macOSDock"
     static let visibility = "general.visibility"
+    static let display = "general.display"
     static let iCloud = "general.iCloud"
     static let backup = "general.backup"
     static let position = "appearance.position"
     static let size = "appearance.size"
     static let magnification = "appearance.magnification"
     static let launching = "appearance.launching"
+    static let previews = "appearance.previews"
     static let pinned = "applications.pinned"
     static let hidden = "applications.hidden"
     static let stacks = "stacks.folders"
@@ -103,8 +108,10 @@ private enum SettingsIndex {
              ["export", "backup", "save", "json", "share"]),
         item("import", .general, SettingsAnchor.backup, "Backup", "Import settings",
              ["import", "restore", "load", "json"]),
-        item("autoHide", .general, SettingsAnchor.visibility, "Visibility", "Automatically hide and show the dock",
-             ["autohide", "auto-hide", "hide", "reveal", "edge"]),
+        item("autoHide", .interactions, SettingsAnchor.visibility, "Auto-hide", "Automatically hide and show the dock",
+             ["autohide", "auto-hide", "hide", "reveal", "edge", "sensitivity", "delay", "speed"]),
+        item("display", .general, SettingsAnchor.display, "Display", "Show the dock on",
+             ["display", "screen", "monitor", "follow", "all displays", "primary"]),
         item("edge", .appearance, SettingsAnchor.position, "Position", "Position on screen",
              ["left", "right", "bottom", "edge", "side", "orientation"]),
         item("iconSize", .appearance, SettingsAnchor.size, "Size", "Icon size",
@@ -113,16 +120,26 @@ private enum SettingsIndex {
              ["padding", "spacing", "gap", "between icons"]),
         item("dockPadding", .appearance, SettingsAnchor.size, "Size", "Dock padding",
              ["padding", "margin", "inset", "bar"]),
-        item("magnify", .appearance, SettingsAnchor.magnification, "Magnification", "Magnify icons under the pointer",
+        item("magnify", .interactions, SettingsAnchor.magnification, "Magnification", "Magnify icons under the pointer",
              ["magnification", "zoom", "grow", "enlarge", "hover"]),
-        item("magnifiedSize", .appearance, SettingsAnchor.magnification, "Magnification", "Magnified size",
-             ["magnification", "zoom", "size"]),
-        item("smoothHover", .appearance, SettingsAnchor.magnification, "Magnification", "Smooth hover animation",
+        item("magnifyAmount", .interactions, SettingsAnchor.magnification, "Magnification", "Amount",
+             ["magnification", "zoom", "size", "amount", "scale"]),
+        item("magnifyReach", .interactions, SettingsAnchor.magnification, "Magnification", "Reach",
+             ["magnification", "reach", "spread", "falloff", "narrow", "wide"]),
+        item("magnifyApproach", .interactions, SettingsAnchor.magnification, "Magnification", "Magnify as the pointer approaches",
+             ["magnification", "approach", "near", "proximity"]),
+        item("smoothHover", .interactions, SettingsAnchor.magnification, "Magnification", "Smooth hover animation",
              ["animation", "spring", "glide", "smooth", "hover"]),
-        item("hoverIntensity", .appearance, SettingsAnchor.magnification, "Magnification", "Hover highlight",
+        item("hoverIntensity", .interactions, SettingsAnchor.magnification, "Magnification", "Hover highlight",
              ["hover", "highlight", "intensity", "glow", "brightness", "opacity"]),
-        item("bounce", .appearance, SettingsAnchor.launching, "Launching", "Bounce icons while apps open",
+        item("bounce", .interactions, SettingsAnchor.launching, "Launching", "Bounce icons while apps open",
              ["bounce", "launch", "opening", "animation", "jump"]),
+        item("previews", .interactions, SettingsAnchor.previews, "Window previews", "Show window previews on hover",
+             ["preview", "thumbnail", "windows", "hover", "peek"]),
+        item("previewDelay", .interactions, SettingsAnchor.previews, "Window previews", "Preview delay",
+             ["preview", "delay", "hover", "wait"]),
+        item("previewControls", .interactions, SettingsAnchor.previews, "Window previews", "Window controls",
+             ["preview", "close", "controls", "title", "buttons"]),
         item("pinned", .applications, SettingsAnchor.pinned, "Pinned apps", "Pinned apps",
              ["pin", "keep in dock", "remove", "apps", "applications"]),
         item("hiddenApps", .applications, SettingsAnchor.hidden, "Hidden apps", "Hidden apps",
@@ -301,6 +318,7 @@ private struct SettingsRootView: View {
         switch tab {
         case .general: GeneralPane(settings: settings)
         case .appearance: AppearancePane(settings: settings)
+        case .interactions: InteractionsPane(settings: settings)
         case .applications: ApplicationsPane(settings: settings)
         case .stacks: StacksPane(settings: settings)
         case .about: AboutPane()
@@ -337,11 +355,31 @@ private struct GeneralPane: View {
                     subtitle: "It keeps running for Cmd-Tab, Mission Control and Spaces — just out of sight.",
                     isOn: $settings.hidesSystemDock)
             }
-            SettingsSection(title: "Visibility", anchor: SettingsAnchor.visibility) {
-                SettingsToggle(
-                    title: "Automatically hide and show the dock",
-                    subtitle: "Slides away when the pointer leaves it; push against the screen edge to bring it back.",
-                    isOn: $settings.autoHides)
+            SettingsSection(
+                title: "Display", anchor: SettingsAnchor.display,
+                footer: NSScreen.screens.count > 1
+                    ? nil : "One screen is attached right now; these take effect when more are."
+            ) {
+                SettingsChoice(
+                    title: "Show the dock on",
+                    selection: $settings.displayMode,
+                    options: [
+                        .init(value: .followPointer, title: "Follow the pointer", symbol: "cursorarrow.motionlines"),
+                        .init(value: .primary, title: "Primary display", symbol: "menubar.dock.rectangle"),
+                        .init(value: .specific, title: "A specific display", symbol: "1.square"),
+                        .init(value: .all, title: "All displays", symbol: "rectangle.on.rectangle"),
+                    ])
+                if settings.displayMode == .specific {
+                    SettingsRow(title: "Display") {
+                        Picker("", selection: $settings.specificDisplay) {
+                            ForEach(NSScreen.screens, id: \.displayUUID) { screen in
+                                Text(screen.localizedName).tag(screen.displayUUID ?? "")
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 220)
+                    }
+                }
             }
             SettingsSection(
                 title: "iCloud", anchor: SettingsAnchor.iCloud,
@@ -396,10 +434,7 @@ private struct AppearancePane: View {
     @Bindable var settings: DockSettings
 
     var body: some View {
-        SettingsPage(
-            title: "Appearance",
-            subtitle: "Where the dock sits, how big it is, and how it answers the pointer."
-        ) {
+        SettingsPage(title: "Appearance", subtitle: "Where the dock sits and how big it is.") {
             SettingsSection(title: "Position", anchor: SettingsAnchor.position) {
                 SettingsChoice(
                     title: "Position on screen",
@@ -419,9 +454,64 @@ private struct AppearancePane: View {
                     title: "Dock padding", subtitle: "Space between the icons and the edge of the bar.",
                     value: $settings.dockPadding, range: 0...24)
             }
+        }
+    }
+}
+
+private struct InteractionsPane: View {
+    @Bindable var settings: DockSettings
+
+    var body: some View {
+        SettingsPage(title: "Interactions", subtitle: "How the dock answers the pointer.") {
+            SettingsSection(title: "Auto-hide", anchor: SettingsAnchor.visibility) {
+                SettingsToggle(
+                    title: "Automatically hide and show the dock",
+                    subtitle: "Slides away when the pointer leaves it; push against the screen edge to bring it back.",
+                    isOn: $settings.autoHides)
+                SettingsSlider(
+                    title: "Reveal sensitivity", subtitle: "How close to the edge the pointer must push.",
+                    value: $settings.revealSensitivity, range: 1...20,
+                    format: { "\(Int($0)) pt" })
+                    .disabled(!settings.autoHides)
+                SettingsSlider(
+                    title: "Reveal delay", subtitle: "How long the pointer holds the edge first.",
+                    value: $settings.revealDelay, range: 0...2, step: 0.1,
+                    format: { $0 == 0 ? "None" : String(format: "%.1fs", $0) })
+                    .disabled(!settings.autoHides)
+                SettingsSlider(
+                    title: "Hide delay", subtitle: "How long after the pointer leaves before it slides away.",
+                    value: $settings.hideDelay, range: 0...2, step: 0.1,
+                    format: { $0 == 0 ? "None" : String(format: "%.1fs", $0) })
+                    .disabled(!settings.autoHides)
+                SettingsSlider(
+                    title: "Reveal speed",
+                    value: $settings.revealSpeed, range: 0.25...4, step: 0.25,
+                    format: { String(format: "%.2f×", $0) })
+                    .disabled(!settings.autoHides)
+                SettingsSlider(
+                    title: "Hide speed",
+                    value: $settings.hideSpeed, range: 0.25...4, step: 0.25,
+                    format: { String(format: "%.2f×", $0) })
+                    .disabled(!settings.autoHides)
+            }
             SettingsSection(title: "Magnification", anchor: SettingsAnchor.magnification) {
                 SettingsToggle(title: "Magnify icons under the pointer", isOn: $settings.magnifies)
-                SettingsSlider(title: "Magnified size", value: $settings.magnifiedSize, range: 32...192)
+                SettingsSlider(
+                    title: "Amount", subtitle: "How much the hovered icon grows.",
+                    value: $settings.magnifyAmount, range: 1.0...2.5, step: 0.05,
+                    format: { String(format: "%.2f×", $0) })
+                    .disabled(!settings.magnifies)
+                SettingsSlider(
+                    title: "Reach", subtitle: "How far along the bar the growth spreads.",
+                    value: $settings.magnifyReach, range: 1.0...4.0, step: 1.0,
+                    // Words, not "icons": the honest unit is icon-widths, which read as a glitch on
+                    // the slider, and points would change meaning with every icon-size change.
+                    format: { ["Narrow", "Medium", "Wide", "Widest"][min(max(Int($0), 1), 4) - 1] })
+                    .disabled(!settings.magnifies)
+                SettingsToggle(
+                    title: "Magnify as the pointer approaches",
+                    subtitle: "The bar swells to meet the pointer instead of waiting for it to arrive.",
+                    isOn: $settings.magnifyOnApproach)
                     .disabled(!settings.magnifies)
                 SettingsToggle(
                     title: "Smooth hover animation",
@@ -439,6 +529,25 @@ private struct AppearancePane: View {
                     title: "Bounce icons while apps open",
                     subtitle: "Stops once the app has finished launching.",
                     isOn: $settings.bouncesOnLaunch)
+            }
+            SettingsSection(
+                title: "Window previews", anchor: SettingsAnchor.previews,
+                footer: "Previews need Screen Recording permission the first time; DockIt asks when a preview would first appear."
+            ) {
+                SettingsToggle(
+                    title: "Show window previews on hover",
+                    subtitle: "Rest the pointer on a running app to see its windows. Click one to jump to it.",
+                    isOn: $settings.showsWindowPreviews)
+                SettingsSlider(
+                    title: "Preview delay",
+                    value: $settings.previewDelay, range: 0...2, step: 0.1,
+                    format: { String(format: "%.1fs", $0) })
+                    .disabled(!settings.showsWindowPreviews)
+                SettingsToggle(
+                    title: "Window controls",
+                    subtitle: "A title and close button on each preview.",
+                    isOn: $settings.previewShowsControls)
+                    .disabled(!settings.showsWindowPreviews)
             }
         }
     }

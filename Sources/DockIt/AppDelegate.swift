@@ -17,7 +17,7 @@ enum DockitApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = DockSettings.shared
     private var model: DockModel?
-    private var controller: DockController?
+    private var controllers: [DockController] = []
     private var menuBarItem: MenuBarItem?
     private var settingsSync: SettingsSync?
     private var watchdog: Timer?
@@ -25,7 +25,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = DockModel(settings: settings)
         self.model = model
-        controller = DockController(model: model, settings: settings)
+        rebuildControllers()
+        // Both what decides which screens get a dock: the setting, and the screens themselves.
+        observeContinuously { [settings] in
+            _ = (settings.displayMode, settings.specificDisplay)
+        } onChange: { [weak self] in
+            self?.rebuildControllers()
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rebuildControllers() }
+        }
         menuBarItem = MenuBarItem(settings: settings)
         settingsSync = SettingsSync(settings: settings)
         if settings.hidesSystemDock { SystemDock.hide() }
@@ -41,6 +52,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdog.tolerance = 1
         RunLoop.main.add(watchdog, forMode: .common)
         self.watchdog = watchdog
+    }
+
+    /// One dock per screen the display mode names. Rebuilt whole on any change: controllers are
+    /// cheap, and reconciling panels across display setups is exactly the bookkeeping that breeds
+    /// stale frames.
+    private func rebuildControllers() {
+        guard let model else { return }
+        for controller in controllers { controller.tearDown() }
+        let screens = NSScreen.screens
+        guard let first = screens.first else {
+            controllers = []
+            return
+        }
+        let targets: [NSScreen] = switch settings.displayMode {
+        case .all: screens
+        case .specific: [screens.first { $0.displayUUID == settings.specificDisplay } ?? first]
+        case .followPointer, .primary: [first]
+        }
+        controllers = targets.map { DockController(model: model, settings: settings, screen: $0) }
     }
 
     /// Asks whether to bring the macOS Dock back. Not at logout or shutdown: nobody is there to

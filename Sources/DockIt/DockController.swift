@@ -11,21 +11,32 @@ import SwiftUI
 final class DockController {
     private static let labelRoom: CGFloat = 40
     private static let sideLabelRoom: CGFloat = 240
-    private static let hideDelay: TimeInterval = 0.5
 
     private let model: DockModel
     private let settings: DockSettings
+    let state = PanelState()
     private let panel = DockPanel()
+    private let previews: PreviewController
+    /// The display this dock is anchored to, by id: an NSScreen instance goes stale across
+    /// configuration changes, an id names the display for as long as it is attached.
+    private var displayID: CGDirectDisplayID
     private var timer: Timer?
     private var isPollingFast = false
     private var leftBarAt: Date?
+    private var edgeHeldAt: Date?
     private var openMenus = 0
 
-    init(model: DockModel, settings: DockSettings) {
+    private var screen: NSScreen {
+        NSScreen.screens.first { $0.displayID == displayID } ?? NSScreen.screens[0]
+    }
+
+    init(model: DockModel, settings: DockSettings, screen: NSScreen) {
         self.model = model
         self.settings = settings
+        displayID = screen.displayID
+        previews = PreviewController(settings: settings)
 
-        let host = FirstMouseHostingView(rootView: DockView(model: model, settings: settings))
+        let host = FirstMouseHostingView(rootView: DockView(model: model, state: state, settings: settings))
         // The panel's frame is DockIt's to set; without this the hosting view resizes the window to
         // fit its content.
         host.sizingOptions = []
@@ -48,16 +59,25 @@ final class DockController {
         setPolling(fast: false)
     }
 
+    /// Ordered out and stopped; the delegate replaces controllers when the display setup changes.
+    func tearDown() {
+        timer?.invalidate()
+        timer = nil
+        previews.hide()
+        panel.orderOut(nil)
+    }
+
     private func trackSettings() {
         observeContinuously { [settings] in
-            _ = (settings.edge, settings.iconSize, settings.iconPadding, settings.dockPadding, settings.magnifies, settings.magnifiedSize, settings.autoHides)
+            _ = (settings.edge, settings.iconSize, settings.iconPadding, settings.dockPadding,
+                 settings.magnifies, settings.magnifyAmount, settings.autoHides)
         } onChange: { [weak self] in
             self?.layoutPanel()
         }
     }
 
     private func layoutPanel() {
-        guard let screen = NSScreen.screens.first else { return }
+        let screen = self.screen
         let metrics = model.metrics
         let depth = metrics.magnifiedSize + 2 * metrics.padding
         let full = screen.frame
@@ -72,7 +92,7 @@ final class DockController {
             NSRect(x: full.maxX - depth - Self.sideLabelRoom, y: full.minY, width: depth + Self.sideLabelRoom, height: top - full.minY)
         }
         panel.setFrame(frame, display: true)
-        model.stripLength = settings.edge == .bottom ? frame.width : frame.height
+        state.stripLength = settings.edge == .bottom ? frame.width : frame.height
     }
 
     // MARK: - Pointer
@@ -98,6 +118,14 @@ final class DockController {
 
     private func tick() {
         let mouse = NSEvent.mouseLocation
+        // Follow the pointer: when it crosses onto another screen, the dock goes with it.
+        if settings.displayMode == .followPointer,
+            let under = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }),
+            under.displayID != displayID {
+            displayID = under.displayID
+            previews.hide()
+            layoutPanel()
+        }
         let frame = panel.frame
         let (along, across) = switch settings.edge {
         case .bottom: (mouse.x - frame.minX, mouse.y - frame.minY)
@@ -105,11 +133,11 @@ final class DockController {
         case .right: (frame.maxY - mouse.y, frame.maxX - mouse.x)
         }
         let metrics = model.metrics
-        let layout = model.layout
-        let onEdge = along >= 0 && along <= model.stripLength && across >= -1
+        let layout = model.layout(for: state)
+        let onEdge = along >= 0 && along <= state.stripLength && across >= -1
         // Once magnified, the grown icons are part of the bar; before that, only the resting bar is.
-        let reach = model.pointer == nil ? metrics.thickness : (layout.sizes.max() ?? metrics.iconSize) + metrics.padding
-        let overBar = onEdge && !model.isHidden
+        let reach = state.pointer == nil ? metrics.thickness : (layout.sizes.max() ?? metrics.iconSize) + metrics.padding
+        let overBar = onEdge && !state.isHidden
             && along >= layout.start && along <= layout.start + layout.length && across <= reach
 
         // Only where the bar is: revealed anywhere along the edge, a bar the pointer is not over
@@ -117,9 +145,21 @@ final class DockController {
         let alongBar = along >= layout.start && along <= layout.start + layout.length
         updateAutoHide(onEdge: onEdge && alongBar, across: across, overBar: overBar)
 
-        let pointer = overBar ? along : nil
-        if pointer != model.pointer {
-            if pointer != nil, model.pointer == nil { model.refreshTrash() }
+        let hoveredIndex = overBar ? layout.index(at: along) : nil
+        let hoveredItem = hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
+        previews.update(
+            hovered: hoveredItem, center: hoveredIndex.map(layout.center(of:)), mouse: mouse,
+            dockFrame: frame, edge: settings.edge, barReach: reach, isDockHidden: state.isHidden,
+            screen: screen)
+
+        // Approaching: near the bar but not on it yet. The gain ramps the growth in over the last
+        // stretch of travel, so the bar swells to meet the pointer instead of jumping when it lands.
+        let approaching = settings.magnifyOnApproach && settings.magnifies && onEdge && !state.isHidden
+            && alongBar && !overBar && across <= reach * 3
+        let pointer = (overBar || approaching) ? along : nil
+        state.gain = overBar || !approaching ? 1 : max(0, 1 - (across - reach) / (reach * 2))
+        if pointer != state.pointer {
+            if pointer != nil, state.pointer == nil { model.refreshTrash() }
             // Every update is animated, not just entering and leaving. A spring retargets mid-flight
             // and keeps its velocity, so each new pointer position bends the motion already under
             // way instead of snapping to it — the icons glide after the pointer rather than stepping
@@ -133,25 +173,34 @@ final class DockController {
                 // jumping the pointer between icons: a third grown at 0.11 s, settled by 0.25-0.3 s.
                 .smooth(duration: 0.25)
             }
-            withAnimation(spring) { model.pointer = pointer }
+            withAnimation(spring) { state.pointer = pointer }
         }
         if panel.ignoresMouseEvents == overBar { panel.ignoresMouseEvents = !overBar }
 
-        let nearZone = model.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
+        let nearZone = state.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
         setPolling(fast: onEdge && across < nearZone)
     }
 
     private func updateAutoHide(onEdge: Bool, across: CGFloat, overBar: Bool) {
         guard settings.autoHides else {
-            if model.isHidden { setHidden(false) }
+            if state.isHidden { setHidden(false) }
             return
         }
-        if model.isHidden {
-            if onEdge && across <= 1 { setHidden(false) }
-        } else if overBar || openMenus > 0 {
+        if state.isHidden {
+            // Pushing against the edge, within the sensitivity, for the reveal delay.
+            if onEdge && across <= max(settings.revealSensitivity, 1) {
+                if let held = edgeHeldAt {
+                    if Date().timeIntervalSince(held) >= settings.revealDelay { setHidden(false) }
+                } else {
+                    edgeHeldAt = Date()
+                }
+            } else {
+                edgeHeldAt = nil
+            }
+        } else if overBar || openMenus > 0 || previews.keepsDockShown {
             leftBarAt = nil
         } else if let left = leftBarAt {
-            if Date().timeIntervalSince(left) > Self.hideDelay { setHidden(true) }
+            if Date().timeIntervalSince(left) > settings.hideDelay { setHidden(true) }
         } else {
             leftBarAt = Date()
         }
@@ -159,7 +208,22 @@ final class DockController {
 
     private func setHidden(_ hidden: Bool) {
         leftBarAt = nil
-        withAnimation(.easeInOut(duration: 0.2)) { model.isHidden = hidden }
+        edgeHeldAt = nil
+        // The speed settings are multipliers on the stock quarter-second-ish slide.
+        let speed = max(hidden ? settings.hideSpeed : settings.revealSpeed, 0.1)
+        withAnimation(.easeInOut(duration: 0.2 / speed)) { state.isHidden = hidden }
+    }
+}
+
+extension NSScreen {
+    /// The CoreGraphics id under the AppKit wrapper — the stable name for "this display".
+    var displayID: CGDirectDisplayID {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    var displayUUID: String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
     }
 }
 

@@ -28,11 +28,6 @@ final class DockModel {
     static let dropTypes: [UTType] = [.fileURL, dragType]
 
     private(set) var items: [DockItem] = []
-    /// Along-axis pointer position within the strip while the pointer is over the bar.
-    var pointer: CGFloat?
-    /// Length of the panel's edge, which the bar is centred in.
-    var stripLength: CGFloat = 0
-    var isHidden = false
     private(set) var trashIsFull = false
     /// Item ids of apps between starting to launch and finishing — their icons bounce.
     private(set) var launching: Set<String> = []
@@ -50,7 +45,6 @@ final class DockModel {
     private static let bounceCycle: TimeInterval = 0.6
     @ObservationIgnored private var launchStarts: [String: Date] = [:]
     @ObservationIgnored private var runningObservation: NSKeyValueObservation?
-    @ObservationIgnored private var policyObservations: [pid_t: NSKeyValueObservation] = [:]
     /// Whether the Accessibility prompt has been shown in this run.
     private static var hasPromptedForAccessibility = false
 
@@ -78,22 +72,30 @@ final class DockModel {
                 }
             }
         }
-        // An app can start as a background process and become a regular one later, which none of
-        // the notifications above announce — so each app's activation policy is watched too.
-        runningObservation = NSWorkspace.shared.observe(\.runningApplications, options: [.initial]) {
+        // On NSWorkspace, which lives as long as the process — never on the NSRunningApplication
+        // objects themselves. Per-app KVO on `activationPolicy` was tried and crashed (SIGSEGV in
+        // AppKit's runningApplicationNotificationCallback, report 2026-09-28-102833): AppKit can
+        // deallocate an app's record while it is still observed. Policy flips with no membership
+        // change are caught by the timer below instead.
+        runningObservation = NSWorkspace.shared.observe(\.runningApplications) {
             @Sendable [weak self] _, _ in
-            Task { @MainActor in self?.runningApplicationsChanged() }
+            Task { @MainActor in self?.rebuild() }
         }
         rebuild()
         refreshTrash()
         trackItems()
         // Things reach the Trash from Finder with nothing announced to DockIt, and it cannot watch a
         // folder it is not allowed to open. Two `stat` calls every couple of seconds costs nothing.
-        let trashTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshTrash() }
+        // The rebuild sweeps up what no notification announces — chiefly an app switching its
+        // activation policy to become a regular app after launch — and no-ops when nothing changed.
+        let maintenanceTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshTrash()
+                self?.rebuild()
+            }
         }
-        trashTimer.tolerance = 0.5
-        RunLoop.main.add(trashTimer, forMode: .common)
+        maintenanceTimer.tolerance = 0.5
+        RunLoop.main.add(maintenanceTimer, forMode: .common)
     }
 
     /// Rebuilds whenever the pinned apps or stacks change, whether the dock itself changed them or
@@ -106,22 +108,6 @@ final class DockModel {
         }
     }
 
-    /// Watches the activation policy of every running app, keeping the observations of apps still
-    /// running and dropping those of apps that quit. Rebuilding is cheap: it no-ops when nothing
-    /// visible changed.
-    private func runningApplicationsChanged() {
-        var observations: [pid_t: NSKeyValueObservation] = [:]
-        for app in NSWorkspace.shared.runningApplications {
-            let pid = app.processIdentifier
-            observations[pid] = policyObservations[pid] ?? app.observe(\.activationPolicy) {
-                @Sendable [weak self] _, _ in
-                Task { @MainActor in self?.rebuild() }
-            }
-        }
-        policyObservations = observations
-        rebuild()
-    }
-
     var metrics: DockMetrics {
         DockMetrics(
             iconSize: settings.iconSize,
@@ -131,13 +117,19 @@ final class DockModel {
         )
     }
 
-    var layout: DockLayout {
-        DockLayout(
+    /// The bar's geometry for one screen's panel. The falloff carries the Reach setting and the
+    /// panel's approach gain, so the pure geometry stays free of both.
+    func layout(for state: PanelState) -> DockLayout {
+        let reach = settings.magnifyReach
+        let gain = state.gain
+        return DockLayout(
             magnifies: items.map { $0.kind != .separator },
             metrics: metrics,
-            stripLength: stripLength,
-            pointer: pointer,
-            falloff: magnificationFalloff
+            stripLength: state.stripLength,
+            pointer: state.pointer,
+            falloff: { distance, iconSize in
+                magnificationFalloff(distance: distance, iconSize: iconSize, reachIcons: reach) * gain
+            }
         )
     }
 
