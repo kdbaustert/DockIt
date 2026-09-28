@@ -25,9 +25,14 @@ final class DockController {
     private var leftBarAt: Date?
     private var edgeHeldAt: Date?
     private var openMenus = 0
+    /// Kept so tearDown can remove them: block observers outlive their controller otherwise, and
+    /// every display change would leave three more behind.
+    private var observers: [NSObjectProtocol] = []
 
-    private var screen: NSScreen {
-        NSScreen.screens.first { $0.displayID == displayID } ?? NSScreen.screens[0]
+    /// Nil while no screen is attached at all — display sleep or an unplug on a headless-capable Mac
+    /// empties the list, and indexing it then would trap.
+    private var screen: NSScreen? {
+        NSScreen.screens.first { $0.displayID == displayID } ?? NSScreen.screens.first
     }
 
     init(model: DockModel, settings: DockSettings, screen: NSScreen) {
@@ -45,16 +50,16 @@ final class DockController {
         panel.orderFrontRegardless()
 
         let center = NotificationCenter.default
-        center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+        observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.layoutPanel() }
-        }
+        })
         // An open context menu or stack keeps the dock up even though the pointer has left the bar.
-        center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+        observers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openMenus += 1 }
-        }
-        center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+        })
+        observers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openMenus = max((self?.openMenus ?? 1) - 1, 0) }
-        }
+        })
         trackSettings()
         setPolling(fast: false)
     }
@@ -63,12 +68,14 @@ final class DockController {
     func tearDown() {
         timer?.invalidate()
         timer = nil
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers = []
         previews.hide()
         panel.orderOut(nil)
     }
 
     private func trackSettings() {
-        observeContinuously { [settings] in
+        observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.edge, settings.iconSize, settings.iconPadding, settings.dockPadding,
                  settings.magnifies, settings.magnifyAmount, settings.autoHides)
         } onChange: { [weak self] in
@@ -77,7 +84,7 @@ final class DockController {
     }
 
     private func layoutPanel() {
-        let screen = self.screen
+        guard let screen = self.screen else { return }
         let metrics = model.metrics
         let depth = metrics.magnifiedSize + 2 * metrics.padding
         let full = screen.frame
@@ -106,7 +113,9 @@ final class DockController {
         guard timer == nil || fast != isPollingFast else { return }
         timer?.invalidate()
         isPollingFast = fast
-        let refreshRate = Double(max(NSScreen.screens.first?.maximumFramesPerSecond ?? 60, 60))
+        // This dock's own display: with a ProMotion laptop beside a 60 Hz monitor, the first screen's
+        // rate would be wrong for one of the two docks.
+        let refreshRate = Double(max(screen?.maximumFramesPerSecond ?? 60, 60))
         let timer = Timer(timeInterval: fast ? 1 / refreshRate : 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -117,6 +126,8 @@ final class DockController {
     }
 
     private func tick() {
+        // No screen attached: nothing to lay out against; the next display change rebuilds anyway.
+        guard screen != nil else { return }
         let mouse = NSEvent.mouseLocation
         // Follow the pointer: when it crosses onto another screen, the dock goes with it.
         if settings.displayMode == .followPointer,

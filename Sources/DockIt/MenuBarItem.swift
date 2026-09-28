@@ -14,7 +14,7 @@ final class MenuBarItem {
 
     private func update() {
         // Re-running the read is the whole update, so there is nothing more to do on a change.
-        observeContinuously { [weak self] in
+        observeContinuously(ownedBy: self) { [weak self] in
             guard let self else { return }
             settings.showsMenuBarIcon ? install() : remove()
         } onChange: {}

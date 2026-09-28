@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.model = model
         rebuildControllers()
         // Both what decides which screens get a dock: the setting, and the screens themselves.
-        observeContinuously { [settings] in
+        observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.displayMode, settings.specificDisplay)
         } onChange: { [weak self] in
             self?.rebuildControllers()

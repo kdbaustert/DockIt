@@ -20,6 +20,9 @@ final class PreviewController {
 
     private var shownItemID: String?
     private var hoverItemID: String?
+    /// The hovered item whose capture came back with nothing. Resting on it must not re-run the
+    /// whole ScreenCaptureKit + AX + Spaces lookup every dwell period — Finder with no windows did.
+    private var emptyItemID: String?
     private var hoverStart: Date?
     private var leftAt: Date?
     private var captureTask: Task<Void, Never>?
@@ -53,10 +56,11 @@ final class PreviewController {
         }
         if let item = eligible, let center {
             leftAt = nil
-            if item.id == shownItemID { return }
+            if item.id == shownItemID || item.id == emptyItemID { return }
             if item.id != hoverItemID {
                 hoverItemID = item.id
                 hoverStart = Date()
+                emptyItemID = nil
             }
             let dwell = panel.isVisible ? min(settings.previewDelay, Self.switchDelay) : settings.previewDelay
             if let start = hoverStart, Date().timeIntervalSince(start) >= dwell {
@@ -73,6 +77,7 @@ final class PreviewController {
             }
         } else {
             hoverItemID = nil
+            emptyItemID = nil
             hoverStart = nil
         }
     }
@@ -82,14 +87,18 @@ final class PreviewController {
         captureTask = nil
         shownItemID = nil
         hoverItemID = nil
+        emptyItemID = nil
         hoverStart = nil
         leftAt = nil
         pointerInPanel = false
-        if panel.isVisible {
-            panel.orderOut(nil)
-            // The thumbnails are the panel's biggest allocation; a dismissed panel keeps none.
-            host.rootView = AnyView(EmptyView())
-        }
+        orderOutPanel()
+    }
+
+    private func orderOutPanel() {
+        guard panel.isVisible else { return }
+        panel.orderOut(nil)
+        // The thumbnails are the panel's biggest allocation; a dismissed panel keeps none.
+        host.rootView = AnyView(EmptyView())
     }
 
     private func show(_ item: DockItem, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
@@ -111,8 +120,13 @@ final class PreviewController {
             guard let self, !Task.isCancelled, shownItemID == item.id else { return }
             captureTask = nil
             guard !thumbs.isEmpty else {
-                // Running, but nothing to show — a windowless agent, or every capture came up blank.
-                hide()
+                // Running, but nothing to show — a windowless agent, every capture came up blank, or
+                // the window list could not be read (`thumbnails` answers a thrown error with none).
+                // Not `hide()`: that forgets the hover, and the next dwell would capture again.
+                emptyItemID = item.id
+                shownItemID = nil
+                leftAt = nil
+                orderOutPanel()
                 return
             }
             let strip = PreviewStrip(

@@ -45,6 +45,8 @@ final class DockModel {
     private static let bounceCycle: TimeInterval = 0.6
     @ObservationIgnored private var launchStarts: [String: Date] = [:]
     @ObservationIgnored private var runningObservation: NSKeyValueObservation?
+    /// What the running apps looked like at the last rebuild; see the maintenance timer.
+    @ObservationIgnored private var lastRunningSignature: [pid_t: Int] = [:]
     /// Whether the Accessibility prompt has been shown in this run.
     private static var hasPromptedForAccessibility = false
 
@@ -86,12 +88,14 @@ final class DockModel {
         trackItems()
         // Things reach the Trash from Finder with nothing announced to DockIt, and it cannot watch a
         // folder it is not allowed to open. Two `stat` calls every couple of seconds costs nothing.
-        // The rebuild sweeps up what no notification announces — chiefly an app switching its
-        // activation policy to become a regular app after launch — and no-ops when nothing changed.
+        // The running-app check sweeps up what no notification announces — chiefly an app switching
+        // its activation policy to become a regular app after launch. Only the check runs here, not
+        // a rebuild: a rebuild touches the disk for every pinned app and stack, and one stack on a
+        // dead SMB share would freeze the dock every two seconds.
         let maintenanceTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshTrash()
-                self?.rebuild()
+                self?.rebuildIfRunningAppsChanged()
             }
         }
         maintenanceTimer.tolerance = 0.5
@@ -101,7 +105,7 @@ final class DockModel {
     /// Rebuilds whenever the pinned apps or stacks change, whether the dock itself changed them or
     /// the Applications or Stacks tab in Settings did.
     private func trackItems() {
-        observeContinuously { [settings] in
+        observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps)
         } onChange: { [weak self] in
             self?.rebuild()
@@ -135,9 +139,20 @@ final class DockModel {
 
     // MARK: - Items
 
+    /// Every running process with its activation policy — in-memory reads only, no disk.
+    private static func runningSignature(_ apps: [NSRunningApplication]) -> [pid_t: Int] {
+        Dictionary(apps.map { ($0.processIdentifier, $0.activationPolicy.rawValue) }) { first, _ in first }
+    }
+
+    private func rebuildIfRunningAppsChanged() {
+        if Self.runningSignature(NSWorkspace.shared.runningApplications) != lastRunningSignature { rebuild() }
+    }
+
     func rebuild() {
         let me = ProcessInfo.processInfo.processIdentifier
-        let running = NSWorkspace.shared.runningApplications.filter {
+        let all = NSWorkspace.shared.runningApplications
+        lastRunningSignature = Self.runningSignature(all)
+        let running = all.filter {
             $0.activationPolicy == .regular && $0.processIdentifier != me
         }
         var runningByID: [String: NSRunningApplication] = [:]

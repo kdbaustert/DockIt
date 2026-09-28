@@ -61,15 +61,15 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 private enum SettingsAnchor {
     static let startup = "general.startup"
     static let macOSDock = "general.macOSDock"
-    static let visibility = "general.visibility"
+    static let autoHide = "interactions.autoHide"
     static let display = "general.display"
     static let iCloud = "general.iCloud"
     static let backup = "general.backup"
     static let position = "appearance.position"
     static let size = "appearance.size"
-    static let magnification = "appearance.magnification"
-    static let launching = "appearance.launching"
-    static let previews = "appearance.previews"
+    static let magnification = "interactions.magnification"
+    static let launching = "interactions.launching"
+    static let previews = "interactions.previews"
     static let pinned = "applications.pinned"
     static let hidden = "applications.hidden"
     static let stacks = "stacks.folders"
@@ -108,7 +108,7 @@ private enum SettingsIndex {
              ["export", "backup", "save", "json", "share"]),
         item("import", .general, SettingsAnchor.backup, "Backup", "Import settings",
              ["import", "restore", "load", "json"]),
-        item("autoHide", .interactions, SettingsAnchor.visibility, "Auto-hide", "Automatically hide and show the dock",
+        item("autoHide", .interactions, SettingsAnchor.autoHide, "Auto-hide", "Automatically hide and show the dock",
              ["autohide", "auto-hide", "hide", "reveal", "edge", "sensitivity", "delay", "speed"]),
         item("display", .general, SettingsAnchor.display, "Display", "Show the dock on",
              ["display", "screen", "monitor", "follow", "all displays", "primary"]),
@@ -378,6 +378,14 @@ private struct GeneralPane: View {
                         }
                         .labelsHidden()
                         .frame(width: 220)
+                        // Nothing chosen yet matches no tag, and the picker shows blank — while the
+                        // dock itself already sits on the first screen, the fallback it uses.
+                        .onAppear {
+                            if settings.specificDisplay.isEmpty,
+                               let first = NSScreen.screens.first?.displayUUID {
+                                settings.specificDisplay = first
+                            }
+                        }
                     }
                 }
             }
@@ -463,7 +471,7 @@ private struct InteractionsPane: View {
 
     var body: some View {
         SettingsPage(title: "Interactions", subtitle: "How the dock answers the pointer.") {
-            SettingsSection(title: "Auto-hide", anchor: SettingsAnchor.visibility) {
+            SettingsSection(title: "Auto-hide", anchor: SettingsAnchor.autoHide) {
                 SettingsToggle(
                     title: "Automatically hide and show the dock",
                     subtitle: "Slides away when the pointer leaves it; push against the screen edge to bring it back.",

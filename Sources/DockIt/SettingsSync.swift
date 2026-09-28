@@ -20,6 +20,11 @@ struct PortableSettings: Codable, Equatable {
     var hoverIntensity: Double?
     var bouncesOnLaunch: Bool?
     var autoHides: Bool?
+    var revealSensitivity: Double?
+    var revealDelay: Double?
+    var hideDelay: Double?
+    var revealSpeed: Double?
+    var hideSpeed: Double?
     var showsWindowPreviews: Bool?
     var previewDelay: Double?
     var previewShowsControls: Bool?
@@ -39,6 +44,28 @@ struct PortableSettings: Codable, Equatable {
     static func decoded(from data: Data) throws -> PortableSettings {
         try JSONDecoder().decode(PortableSettings.self, from: data)
     }
+
+    /// Every number pulled into the range its Settings slider offers. A file is outside input: one
+    /// carrying 1e20 would reach the sliders' `Int(value)` labels, which trap on it.
+    func clamped() -> PortableSettings {
+        func clamp(_ value: Double?, _ range: ClosedRange<Double>) -> Double? {
+            value.map { min(max($0, range.lowerBound), range.upperBound) }
+        }
+        var p = self
+        p.iconSize = clamp(iconSize, 24...128)
+        p.iconPadding = clamp(iconPadding, 0...24)
+        p.dockPadding = clamp(dockPadding, 0...24)
+        p.magnifyAmount = clamp(magnifyAmount, 1...2.5)
+        p.magnifyReach = clamp(magnifyReach, 1...4)
+        p.hoverIntensity = clamp(hoverIntensity, 0...40)
+        p.previewDelay = clamp(previewDelay, 0...2)
+        p.revealSensitivity = clamp(revealSensitivity, 1...20)
+        p.revealDelay = clamp(revealDelay, 0...2)
+        p.hideDelay = clamp(hideDelay, 0...2)
+        p.revealSpeed = clamp(revealSpeed, 0.25...4)
+        p.hideSpeed = clamp(hideSpeed, 0.25...4)
+        return p
+    }
 }
 
 extension DockSettings {
@@ -48,6 +75,8 @@ extension DockSettings {
             magnifies: magnifies, magnifyAmount: magnifyAmount, magnifyReach: magnifyReach,
             magnifyOnApproach: magnifyOnApproach, smoothHover: smoothHover,
             hoverIntensity: hoverIntensity, bouncesOnLaunch: bouncesOnLaunch, autoHides: autoHides,
+            revealSensitivity: revealSensitivity, revealDelay: revealDelay, hideDelay: hideDelay,
+            revealSpeed: revealSpeed, hideSpeed: hideSpeed,
             showsWindowPreviews: showsWindowPreviews, previewDelay: previewDelay,
             previewShowsControls: previewShowsControls,
             showsMenuBarIcon: showsMenuBarIcon, pinnedApps: pinnedApps, stacks: stacks, hiddenApps: hiddenApps
@@ -56,7 +85,8 @@ extension DockSettings {
 
     /// Assigns only what differs, so an unchanged value does not fire its observers (the panel would
     /// re-lay out for nothing).
-    func apply(_ p: PortableSettings) {
+    func apply(_ incoming: PortableSettings) {
+        let p = incoming.clamped()
         if let v = p.edge.flatMap(DockEdge.init(rawValue:)), v != edge { edge = v }
         if let v = p.iconSize, v != iconSize { iconSize = v }
         if let v = p.iconPadding, v != iconPadding { iconPadding = v }
@@ -65,7 +95,7 @@ extension DockSettings {
         if let v = p.magnifyAmount, v != magnifyAmount { magnifyAmount = v }
         // An old export carries points; a current one carries the multiple, which wins.
         if p.magnifyAmount == nil, let v = p.magnifiedSize, iconSize > 0 {
-            let amount = min(max(v / iconSize, 1.0), 2.5)
+            let amount = legacyMagnifyAmount(magnifiedSize: v, iconSize: iconSize)
             if amount != magnifyAmount { magnifyAmount = amount }
         }
         if let v = p.magnifyReach, v != magnifyReach { magnifyReach = v }
@@ -74,6 +104,11 @@ extension DockSettings {
         if let v = p.hoverIntensity, v != hoverIntensity { hoverIntensity = v }
         if let v = p.bouncesOnLaunch, v != bouncesOnLaunch { bouncesOnLaunch = v }
         if let v = p.autoHides, v != autoHides { autoHides = v }
+        if let v = p.revealSensitivity, v != revealSensitivity { revealSensitivity = v }
+        if let v = p.revealDelay, v != revealDelay { revealDelay = v }
+        if let v = p.hideDelay, v != hideDelay { hideDelay = v }
+        if let v = p.revealSpeed, v != revealSpeed { revealSpeed = v }
+        if let v = p.hideSpeed, v != hideSpeed { hideSpeed = v }
         if let v = p.showsWindowPreviews, v != showsWindowPreviews { showsWindowPreviews = v }
         if let v = p.previewDelay, v != previewDelay { previewDelay = v }
         if let v = p.previewShowsControls, v != previewShowsControls { previewShowsControls = v }
@@ -152,11 +187,11 @@ final class SettingsSync {
 
     init(settings: DockSettings) {
         self.settings = settings
-        observeContinuously { [weak self] in
+        observeContinuously(ownedBy: self) { [weak self] in
             guard let self else { return }
             settings.syncsWithICloud && Self.isAvailable ? start() : stop()
         } onChange: {}
-        observeContinuously { [settings] in
+        observeContinuously(ownedBy: self) { [settings] in
             _ = settings.portable
         } onChange: { [weak self] in
             self?.scheduleWrite()
@@ -205,12 +240,26 @@ final class SettingsSync {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor, eventMask: [.write, .rename, .delete], queue: .main
         )
-        source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { _ = self?.readRemote() }
+        source.setEventHandler { [weak self, weak source] in
+            let events = source?.data ?? []
+            MainActor.assumeIsolated { self?.folderChanged(folder, events: events) }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()
         watcher = source
+    }
+
+    private func folderChanged(_ folder: URL, events: DispatchSource.FileSystemEvent) {
+        // The folder itself was deleted or moved: the descriptor now names a dead inode and would
+        // never fire again, so watch the path afresh, re-creating the folder if it is gone.
+        if events.contains(.delete) || events.contains(.rename) {
+            watcher?.cancel()
+            watcher = nil
+            guard isRunning else { return }
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            watch(folder)
+        }
+        _ = readRemote()
     }
 
     private func scheduleWrite() {
@@ -228,6 +277,9 @@ final class SettingsSync {
         let current = settings.portable
         guard current != agreed else { return }
         do {
+            // The folder can be deleted in Finder while sync is on; without it every write fails.
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try current.encoded().write(to: url, options: .atomic)
             agreed = current
             lastModified = Self.modified(url)

@@ -79,32 +79,12 @@ enum WindowCapture {
     private typealias CopyManagedFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
     private typealias SetCurrentSpaceFn = @convention(c) (Int32, CFString, UInt64) -> Void
     private typealias ShowHideSpacesFn = @convention(c) (Int32, CFArray) -> Void
-    private nonisolated(unsafe) static let skyLight = dlopen(
-        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", RTLD_LAZY)
-    private nonisolated(unsafe) static let mainConnection: MainConnectionFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSMainConnectionID") else { return nil }
-        return unsafeBitCast(sym, to: MainConnectionFn.self)
-    }()
-    private nonisolated(unsafe) static let copySpacesForWindows: CopySpacesForWindowsFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSCopySpacesForWindows") else { return nil }
-        return unsafeBitCast(sym, to: CopySpacesForWindowsFn.self)
-    }()
-    private nonisolated(unsafe) static let copyManaged: CopyManagedFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSCopyManagedDisplaySpaces") else { return nil }
-        return unsafeBitCast(sym, to: CopyManagedFn.self)
-    }()
-    private nonisolated(unsafe) static let setCurrentSpace: SetCurrentSpaceFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSManagedDisplaySetCurrentSpace") else { return nil }
-        return unsafeBitCast(sym, to: SetCurrentSpaceFn.self)
-    }()
-    private nonisolated(unsafe) static let showSpaces: ShowHideSpacesFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSShowSpaces") else { return nil }
-        return unsafeBitCast(sym, to: ShowHideSpacesFn.self)
-    }()
-    private nonisolated(unsafe) static let hideSpaces: ShowHideSpacesFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "CGSHideSpaces") else { return nil }
-        return unsafeBitCast(sym, to: ShowHideSpacesFn.self)
-    }()
+    private static let mainConnection = SkyLight.symbol("CGSMainConnectionID", MainConnectionFn.self)
+    private static let copySpacesForWindows = SkyLight.symbol("CGSCopySpacesForWindows", CopySpacesForWindowsFn.self)
+    private static let copyManaged = SkyLight.symbol("CGSCopyManagedDisplaySpaces", CopyManagedFn.self)
+    private static let setCurrentSpace = SkyLight.symbol("CGSManagedDisplaySetCurrentSpace", SetCurrentSpaceFn.self)
+    private static let showSpaces = SkyLight.symbol("CGSShowSpaces", ShowHideSpacesFn.self)
+    private static let hideSpaces = SkyLight.symbol("CGSHideSpaces", ShowHideSpacesFn.self)
 
     private nonisolated static func spaceID(from dict: [String: Any]) -> UInt64? {
         ((dict["ManagedSpaceID"] as? NSNumber) ?? (dict["id64"] as? NSNumber))?.uint64Value
@@ -123,16 +103,19 @@ enum WindowCapture {
         let cid = mainConnection()
         guard let spaces = copySpacesForWindows(cid, 0x7, [NSNumber(value: windowID)] as CFArray)?
             .takeRetainedValue() as? [NSNumber],
-            let windowSpace = spaces.first?.uint64Value,
             let displays = copyManaged(cid)?.takeRetainedValue() as? [[String: Any]]
         else { return false }
+        // Every Space the window is on, not just the first: a window assigned to All Desktops is on
+        // all of them, the list starts at Desktop 1, and switching there would yank the user away
+        // from a Desktop that already shows it.
+        let windowSpaces = Set(spaces.map(\.uint64Value))
         for display in displays {
             guard let ident = display["Display Identifier"] as? String,
                   let list = display["Spaces"] as? [[String: Any]],
-                  list.contains(where: { spaceID(from: $0) == windowSpace }),
-                  let current = (display["Current Space"] as? [String: Any]).flatMap(spaceID(from:)),
-                  current != windowSpace
+                  let windowSpace = list.lazy.compactMap(spaceID(from:)).first(where: windowSpaces.contains),
+                  let current = (display["Current Space"] as? [String: Any]).flatMap(spaceID(from:))
             else { continue }
+            if windowSpaces.contains(current) { return false }
             showSpaces(cid, [NSNumber(value: windowSpace)] as CFArray)
             setCurrentSpace(cid, ident as CFString, windowSpace)
             hideSpaces(cid, [NSNumber(value: current)] as CFArray)
@@ -206,7 +189,7 @@ enum WindowActions {
     /// ships on it; loaded once, and nil simply downgrades every raise to an app activation.
     typealias GetWindowFn = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
     /// Shared with WindowCapture's claims check; the symbol only needs loading once.
-    nonisolated(unsafe) static let getWindowIDFn: GetWindowFn? = {
+    nonisolated static let getWindowIDFn: GetWindowFn? = {
         guard let handle = dlopen(
             "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY),
             let symbol = dlsym(handle, "_AXUIElementGetWindow")
@@ -214,23 +197,18 @@ enum WindowActions {
         return unsafeBitCast(symbol, to: GetWindowFn.self)
     }()
 
+    /// Whether closing a window has shown the Accessibility prompt in this run.
+    private static var hasPromptedForAccessibility = false
+
     private typealias SetFrontFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UInt32, UInt32) -> OSStatus
     private typealias PostEventFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> OSStatus
     private typealias GetProcessForPIDFn = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
 
-    private nonisolated(unsafe) static let skyLight = dlopen(
-        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", RTLD_LAZY)
-    private nonisolated(unsafe) static let setFront: SetFrontFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "_SLPSSetFrontProcessWithOptions") else { return nil }
-        return unsafeBitCast(sym, to: SetFrontFn.self)
-    }()
-    private nonisolated(unsafe) static let postEvent: PostEventFn? = {
-        guard let skyLight, let sym = dlsym(skyLight, "SLPSPostEventRecordTo") else { return nil }
-        return unsafeBitCast(sym, to: PostEventFn.self)
-    }()
+    private static let setFront = SkyLight.symbol("_SLPSSetFrontProcessWithOptions", SetFrontFn.self)
+    private static let postEvent = SkyLight.symbol("SLPSPostEventRecordTo", PostEventFn.self)
     /// By path, not from the loaded images: Cmd-Tab measured that importing ApplicationServices does
     /// not bring in the image that vends `GetProcessForPID`, leaving the whole path silently dead.
-    private nonisolated(unsafe) static let getProcessForPID: GetProcessForPIDFn? = {
+    private static let getProcessForPID: GetProcessForPIDFn? = {
         guard let handle = dlopen(
             "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY),
             let sym = dlsym(handle, "GetProcessForPID")
@@ -251,23 +229,21 @@ enum WindowActions {
             AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
         }
         let switched = WindowCapture.travelToSpace(of: windowID)
-        // After a Desktop switch, not during it: key events posted mid-transition are swallowed —
-        // measured here, Chrome kept its other display's window focused until the focus was retried
-        // once the switch had landed.
-        let focusNow = { @MainActor in
-            if focus(windowID, pid: pid), let axWindow {
+        let focusAndMark = { @MainActor () -> Bool in
+            guard focus(windowID, pid: pid) else { return false }
+            if let axWindow {
                 // The app's own bookkeeping, so it draws the window active rather than dimmed.
                 AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
                 AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             }
+            return true
         }
-        if focus(windowID, pid: pid) {
-            if let axWindow {
-                AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
-                AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            }
+        if focusAndMark() {
+            // Again after a Desktop switch, not only during it: key events posted mid-transition are
+            // swallowed — measured here, Chrome kept its other display's window focused until the
+            // focus was retried once the switch had landed.
             if switched {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { focusNow() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { _ = focusAndMark() }
             }
         } else if axWindow != nil {
             NSApp.activate(ignoringOtherApps: true)
@@ -303,7 +279,16 @@ enum WindowActions {
 
     /// Presses the window's own close button — closing is the window's decision, not a kill.
     static func close(_ windowID: CGWindowID, pid: pid_t) {
-        guard let window = element(for: windowID, pid: pid) else { return }
+        guard let window = element(for: windowID, pid: pid) else {
+            // The close button is only reachable over Accessibility. Without it the click would do
+            // nothing and say nothing, so ask for it — once per run, as DockModel's restore does.
+            if !hasPromptedForAccessibility, !AXIsProcessTrusted() {
+                hasPromptedForAccessibility = true
+                // The option's key as a literal: `kAXTrustedCheckOptionPrompt` is a mutable global.
+                _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            }
+            return
+        }
         var button: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &button) == .success,
               let button = button.map({ $0 as! AXUIElement })

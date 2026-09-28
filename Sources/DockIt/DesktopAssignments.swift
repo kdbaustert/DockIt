@@ -75,17 +75,10 @@ private enum Spaces {
     private typealias MainConnectionFn = @convention(c) () -> Int32
     private typealias CopyManagedFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
 
-    private static let handle = dlopen(
-        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", RTLD_LAZY)
-    private static let mainConnection = symbol("CGSMainConnectionID", MainConnectionFn.self)
-    private static let copyManaged = symbol("CGSCopyManagedDisplaySpaces", CopyManagedFn.self)
+    private static let mainConnection = SkyLight.symbol("CGSMainConnectionID", MainConnectionFn.self)
+    private static let copyManaged = SkyLight.symbol("CGSCopyManagedDisplaySpaces", CopyManagedFn.self)
 
-    private static func symbol<T>(_ name: String, _ type: T.Type) -> T? {
-        guard let handle, let pointer = dlsym(handle, name) else { return nil }
-        return unsafeBitCast(pointer, to: T.self)
-    }
-
-    /// The Desktop in front on the display DockIt sits on. "This Desktop" in the Dock means that one.
+    /// The Desktop in front on the display whose dock was clicked. "This Desktop" in the Dock means that one.
     static func currentSpaceUUID() -> String? {
         let displays = managedDisplays()
         // "Main" instead of a UUID when "Displays have separate Spaces" is off: then there is one
@@ -110,11 +103,11 @@ private enum Spaces {
         return displays
     }
 
+    /// The display the pointer is on — the menu asking was opened there, on that display's dock, and
+    /// with a dock on every screen the first screen is often the wrong one.
     private static func dockDisplayUUID() -> String? {
-        guard let number = NSScreen.screens.first?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
-                as? NSNumber,
-              let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue()
-        else { return nil }
-        return CFUUIDCreateString(nil, uuid) as String
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.screens.first
+        return screen?.displayUUID
     }
 }

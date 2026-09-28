@@ -25,6 +25,15 @@ enum DisplayMode: String, CaseIterable {
     case all
 }
 
+/// The magnification multiple for the old points-based setting, shared by the one-time defaults
+/// migration and by importing an old settings file so the two cannot disagree. Clamped to the Amount
+/// slider's 1...2.5 and snapped to its 0.05 steps: 42pt over 36pt icons is 1.1666…, and a value the
+/// slider cannot land on reads as a glitch (measured: it showed as "1.17×").
+func legacyMagnifyAmount(magnifiedSize: Double, iconSize: Double) -> Double {
+    let ratio = magnifiedSize / iconSize
+    return (min(max(ratio, 1.0), 2.5) / 0.05).rounded() * 0.05
+}
+
 @MainActor
 @Observable
 final class DockSettings {
@@ -90,6 +99,17 @@ final class DockSettings {
     var hiddenApps: [String] { didSet { store.set(hiddenApps, forKey: "hiddenApps") } }
 
     private init() {
+        // Migrated once from the old points-based setting, so an existing install keeps its size.
+        // Before `register(defaults:)`: after it, `object(forKey:)` answers with the registered
+        // default and the migration could never see a missing amount. An iconSize never moved off
+        // its default was never persisted, so a missing one means the old default, 48.
+        if store.object(forKey: "magnifyAmount") == nil, store.object(forKey: "magnifiedSize") != nil {
+            let oldIconSize = store.object(forKey: "iconSize") == nil ? 48 : store.double(forKey: "iconSize")
+            if oldIconSize > 0 {
+                let amount = legacyMagnifyAmount(magnifiedSize: store.double(forKey: "magnifiedSize"), iconSize: oldIconSize)
+                store.set(amount, forKey: "magnifyAmount")
+            }
+        }
         store.register(defaults: [
             "edge": DockEdge.bottom.rawValue,
             "iconSize": 48.0,
@@ -122,15 +142,6 @@ final class DockSettings {
         iconPadding = store.double(forKey: "iconPadding")
         dockPadding = store.double(forKey: "dockPadding")
         magnifies = store.bool(forKey: "magnifies")
-        // Migrated once from the old points-based setting, so an existing install keeps its size.
-        if store.object(forKey: "magnifyAmount") == nil, store.object(forKey: "magnifiedSize") != nil,
-            store.double(forKey: "iconSize") > 0 {
-            let ratio = store.double(forKey: "magnifiedSize") / store.double(forKey: "iconSize")
-            // Snapped to the slider's own 0.05 steps: 42pt over 36pt icons is 1.1666…, and a value
-            // the slider cannot land on reads as a glitch (measured: it showed as "1.17×").
-            let snapped = (min(max(ratio, 1.0), 2.5) / 0.05).rounded() * 0.05
-            store.set(snapped, forKey: "magnifyAmount")
-        }
         magnifyAmount = store.double(forKey: "magnifyAmount")
         magnifyReach = store.double(forKey: "magnifyReach")
         magnifyOnApproach = store.bool(forKey: "magnifyOnApproach")
