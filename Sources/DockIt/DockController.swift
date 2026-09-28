@@ -53,9 +53,13 @@ final class DockController {
         observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.layoutPanel() }
         })
-        // An open context menu or stack keeps the dock up even though the pointer has left the bar.
+        // An open context menu or stack keeps the dock up even though the pointer has left the bar,
+        // and takes the preview down: the two would otherwise sit on top of each other.
         observers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.openMenus += 1 }
+            MainActor.assumeIsolated {
+                self?.openMenus += 1
+                self?.previews.hide()
+            }
         })
         observers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openMenus = max((self?.openMenus ?? 1) - 1, 0) }
@@ -158,10 +162,14 @@ final class DockController {
 
         let hoveredIndex = overBar ? layout.index(at: along) : nil
         let hoveredItem = hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
-        previews.update(
-            hovered: hoveredItem, center: hoveredIndex.map(layout.center(of:)), mouse: mouse,
-            dockFrame: frame, edge: settings.edge, barReach: reach, isDockHidden: state.isHidden,
-            screen: screen)
+        // The pointer still rests on the icon while its menu is open; without this the dwell runs
+        // out under the menu and the preview comes straight back.
+        if openMenus == 0 {
+            previews.update(
+                hovered: hoveredItem, center: hoveredIndex.map(layout.center(of:)), mouse: mouse,
+                dockFrame: frame, edge: settings.edge, barReach: reach, isDockHidden: state.isHidden,
+                screen: screen)
+        }
 
         // Approaching: near the bar but not on it yet. The gain ramps the growth in over the last
         // stretch of travel, so the bar swells to meet the pointer instead of jumping when it lands.
