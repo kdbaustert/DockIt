@@ -2,7 +2,7 @@ import AppKit
 import Observation
 
 /// The data behind the bar's widget tiles. Each source runs only while its tile is on, and each
-/// keeps its own cadence: the clock ticks, the weather ambles, now-playing polls the players.
+/// keeps its own cadence: the clock ticks, the weather ambles, now-playing waits for the players.
 @MainActor
 @Observable
 final class WidgetsModel {
@@ -30,7 +30,7 @@ final class WidgetsModel {
     @ObservationIgnored private let settings: DockSettings
     @ObservationIgnored private var clockTimer: Timer?
     @ObservationIgnored private var weatherTimer: Timer?
-    @ObservationIgnored private var playerTimer: Timer?
+    @ObservationIgnored private var playerNotices: PlayerNotices?
     @ObservationIgnored private var weatherTask: Task<Void, Never>?
     /// The one pending retry after a failed fetch. Held so a new configuration can cancel it, and
     /// so failures replace it rather than stacking one sleeper each.
@@ -38,9 +38,12 @@ final class WidgetsModel {
     /// The location the shown reading belongs to — a failed fetch for a different one must not
     /// leave the old city's temperature standing in for it.
     @ObservationIgnored private var weatherReadingLocation: String?
-    /// Set while a poll's osascript round trips are running; the next beat skips rather than piling
-    /// a second poll onto a player that is slow to answer.
+    /// Set while a poll's osascript round trips are running; a notice arriving then waits for it
+    /// rather than piling a second poll onto a player that is slow to answer.
     @ObservationIgnored private var isPollingPlayer = false
+    /// A notice that landed mid-poll, which may carry a newer state than the one being read. Polled
+    /// for once that poll ends: no timer comes along later to catch it.
+    @ObservationIgnored private var needsPlayerRepoll = false
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -264,34 +267,46 @@ final class WidgetsModel {
     // entitlement on current macOS, and DockFix ships a whole helper adapter to get around that.
     // The two players this Mac actually uses both script cleanly. First poll prompts for
     // Automation permission per player, which is expected.
+    //
+    // Polled when a player says something changed, not on a timer. A 3 s timer launched osascript
+    // up to twice per beat, forever, and every launch registered as an app — so the dock rebuilt
+    // for each one's start and exit too. Measured, that was nearly all of DockIt's idle work.
+
+    /// The players asked, in order, with the bundle ids that tell whether each is running.
+    private static let players = [(name: "Spotify", bundleID: "com.spotify.client"),
+                                  (name: "Music", bundleID: "com.apple.Music")]
 
     private func configurePlayer() {
-        playerTimer?.invalidate()
-        playerTimer = nil
         guard settings.showsNowPlaying else {
+            playerNotices = nil
             trackTitle = nil
             clearArtwork()
             return
         }
-        pollPlayer()
-        let timer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.pollPlayer() }
+        playerNotices = PlayerNotices(bundleIDs: Set(Self.players.map(\.bundleID))) { [weak self] in
+            self?.pollPlayer()
         }
-        timer.tolerance = 1
-        RunLoop.main.add(timer, forMode: .common)
-        playerTimer = timer
+        pollPlayer()
     }
 
     private static let separator = "␟"
 
     private func pollPlayer() {
-        guard !isPollingPlayer else { return }
+        guard settings.showsNowPlaying else { return }
+        if isPollingPlayer {
+            needsPlayerRepoll = true
+            return
+        }
         isPollingPlayer = true
+        // Only players that are running: osascript for one that is not costs a process launch to
+        // learn nothing.
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let apps = Self.players.filter { running.contains($0.bundleID) }.map(\.name)
         Task { [weak self] in
             // A playing player beats a paused one: Music left paused must not hide Spotify playing.
             // A paused one shows only when nothing plays, and the first playing one ends the search.
             var shown: (app: String, parts: [String])?
-            for app in ["Spotify", "Music"] {
+            for app in apps {
                 // The timeout bounds each Apple event a busy player sits on; the process kill in
                 // runAppleScript backs it up should osascript hang anyway.
                 let script = """
@@ -317,7 +332,13 @@ final class WidgetsModel {
                 if parts[0] == "playing" { break }
             }
             guard let self else { return }
-            defer { isPollingPlayer = false }
+            defer {
+                isPollingPlayer = false
+                if needsPlayerRepoll {
+                    needsPlayerRepoll = false
+                    pollPlayer()
+                }
+            }
             // Switched off while the poll ran: configurePlayer has already cleared the tile.
             guard settings.showsNowPlaying else { return }
             guard let shown else {
@@ -366,7 +387,7 @@ final class WidgetsModel {
         let script = "tell application \"\(player)\" to \(command)"
         Task {
             _ = await Self.runAppleScript(script)
-            // The tile answers faster than the next poll would.
+            // Not left to the player's notice alone: the tile answers even if none comes.
             try? await Task.sleep(for: .milliseconds(300))
             pollPlayer()
         }
@@ -405,5 +426,45 @@ final class WidgetsModel {
                     .trimmingCharacters(in: .whitespacesAndNewlines))
             }
         }
+    }
+}
+
+/// The players' own change notices, plus their quitting, which neither reliably announces.
+///
+/// The selector API because it is the only one that takes a suspension behavior: AppKit suspends
+/// distributed delivery while an app is inactive, and DockIt is never the active app, so the
+/// block API's coalescing default would hold every notice until Settings happened to be open.
+@MainActor
+private final class PlayerNotices: NSObject {
+    private let bundleIDs: Set<String>
+    private let onChange: @MainActor () -> Void
+
+    init(bundleIDs: Set<String>, onChange: @escaping @MainActor () -> Void) {
+        self.bundleIDs = bundleIDs
+        self.onChange = onChange
+        super.init()
+        let distributed = DistributedNotificationCenter.default()
+        for name in ["com.spotify.client.PlaybackStateChanged", "com.apple.Music.playerInfo"] {
+            distributed.addObserver(
+                self, selector: #selector(playerChanged), name: .init(name), object: nil,
+                suspensionBehavior: .deliverImmediately)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(appTerminated), name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil)
+    }
+
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    @objc private func playerChanged(_ note: Notification) {
+        onChange()
+    }
+
+    @objc private func appTerminated(_ note: Notification) {
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        if let id = app?.bundleIdentifier, bundleIDs.contains(id) { onChange() }
     }
 }

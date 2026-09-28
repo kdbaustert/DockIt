@@ -81,6 +81,8 @@ final class DockModel {
     @ObservationIgnored private var runningObservation: NSKeyValueObservation?
     /// What the running apps looked like at the last rebuild; see the maintenance timer.
     @ObservationIgnored private var lastRunningSignature: [pid_t: Int] = [:]
+    /// Counts the maintenance timer's beats, for the minimized windows' periodic full sweep.
+    @ObservationIgnored private var maintenanceBeats = 0
     /// Whether the Accessibility prompt has been shown in this run.
     private static var hasPromptedForAccessibility = false
 
@@ -120,6 +122,14 @@ final class DockModel {
         rebuild()
         refreshTrash()
         trackItems()
+        // Minimized windows: a full sweep whenever the frontmost app changes, and on the timer below
+        // the frontmost app each beat and every app each 15th (30 s). Asking every app each beat was a
+        // round trip per app every two seconds, and it is almost always the frontmost app that
+        // minimizes or restores.
+        center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshMinimizedWindows() }
+        }
         // Things reach the Trash from Finder with nothing announced to DockIt, and it cannot watch a
         // folder it is not allowed to open. Two `stat` calls every couple of seconds costs nothing.
         // The running-app check sweeps up what no notification announces — chiefly an app switching
@@ -128,9 +138,11 @@ final class DockModel {
         // dead SMB share would freeze the dock every two seconds.
         let maintenanceTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.refreshTrash()
-                self?.rebuildIfRunningAppsChanged()
-                self?.refreshMinimizedWindows()
+                guard let self else { return }
+                self.maintenanceBeats += 1
+                self.refreshTrash()
+                self.rebuildIfRunningAppsChanged()
+                self.refreshMinimizedWindows(frontmostOnly: self.maintenanceBeats % 15 != 0)
             }
         }
         maintenanceTimer.tolerance = 0.5
@@ -277,7 +289,9 @@ final class DockModel {
     /// so their minimized windows get no tile.
     ///
     /// Only checked, never prompted for: this runs off a timer, and the prompt belongs to a click.
-    private func refreshMinimizedWindows() {
+    ///
+    /// `frontmostOnly` asks just the frontmost app and keeps what the last sweep found for the rest.
+    private func refreshMinimizedWindows(frontmostOnly: Bool = false) {
         guard settings.showsMinimizedWindows, AXIsProcessTrusted(), let getWindowID = WindowActions.getWindowIDFn
         else {
             if !minimizedWindows.isEmpty {
@@ -287,9 +301,15 @@ final class DockModel {
             return
         }
         let me = ProcessInfo.processInfo.processIdentifier
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         var found: [MinimizedWindow] = []
         for app in NSWorkspace.shared.runningApplications
         where app.activationPolicy == .regular && app.processIdentifier != me {
+            // Walked in running order either way, so a partial pass keeps the tiles where they were.
+            if frontmostOnly, app.processIdentifier != frontmost {
+                found += minimizedWindows.filter { $0.pid == app.processIdentifier }
+                continue
+            }
             let element = AXUIElementCreateApplication(app.processIdentifier)
             // As in restoreMinimizedWindow: on the main thread, a hung app must not stall the dock
             // for the default six seconds.
