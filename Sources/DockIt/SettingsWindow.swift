@@ -118,7 +118,9 @@ private enum SettingsIndex {
         item("nowPlayingWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Now playing",
              ["music", "spotify", "track", "widget", "now playing"]),
         item("weatherWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Weather",
-             ["weather", "temperature", "forecast", "widget", "location"]),
+             ["weather", "temperature", "forecast", "widget"]),
+        item("weatherLocation", .widgets, SettingsAnchor.widgets, "Widgets", "Weather location",
+             ["city", "state", "town", "place", "location", "search"]),
         item("clockWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Clock",
              ["clock", "time", "date", "widget", "24"]),
         item("spacers", .widgets, SettingsAnchor.spacers, "Spacers", "Add or remove spacers",
@@ -177,6 +179,8 @@ private enum SettingsIndex {
              ["folder", "downloads", "add folder", "stack"]),
         item("version", .about, SettingsAnchor.build, "DockIt", "Version",
              ["version", "build", "about"]),
+        item("sourceCode", .about, SettingsAnchor.build, "DockIt", "Source code",
+             ["github", "source", "repo", "repository", "author", "created by", "credits"]),
     ]
 
     private static func item(
@@ -575,6 +579,8 @@ private struct WeatherLocationRow: View {
     @FocusState private var isFocused: Bool
     @State private var hits: [WidgetsModel.City] = []
     @State private var searchTask: Task<Void, Never>?
+    /// Set by a pick so its own write to the draft doesn't search for the city just chosen.
+    @State private var isPicking = false
 
     var body: some View {
         Group {
@@ -619,7 +625,12 @@ private struct WeatherLocationRow: View {
         .onChange(of: draft) { _, text in
             searchTask?.cancel()
             let query = text.trimmingCharacters(in: .whitespaces)
-            guard isFocused, query.count >= 2, query != settings.weatherLocation else {
+            // Only typing searches: appear and sync write the draft unfocused, and a pick flags
+            // its own write. Not "differs from the saved name" — retyping the saved city to pin it
+            // is exactly when the list is needed.
+            let isPick = isPicking
+            isPicking = false
+            guard isFocused, !isPick, query.count >= 2 else {
                 hits = []
                 return
             }
@@ -637,8 +648,10 @@ private struct WeatherLocationRow: View {
     private func choose(_ city: WidgetsModel.City) {
         searchTask?.cancel()
         hits = []
-        draft = city.label
-        settings.weatherLocation = city.label
+        // Only when the draft will change; otherwise no onChange fires to clear the flag.
+        isPicking = draft != city.placeName
+        draft = city.placeName
+        settings.weatherLocation = city.placeName
         settings.weatherLatitude = city.latitude
         settings.weatherLongitude = city.longitude
         isFocused = false
@@ -966,13 +979,43 @@ private struct AboutPane: View {
     }
 
     var body: some View {
-        SettingsPage(title: "About", subtitle: "A Dock replacement for macOS.") {
+        SettingsPage(title: "About") {
+            VStack(spacing: 6) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 88, height: 88)
+                    .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                    .padding(.bottom, 4)
+                Text("DockIt").font(.system(size: 24, weight: .bold))
+                Text("A Dock replacement for macOS.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                // Markdown, so the name alone is the link and the sentence still reads as one line.
+                Text("Created by [Kenny B](https://github.com/kdbaustert)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .tint(.accentColor)
+                    .help("github.com/kdbaustert")
+                    .padding(.top, 8)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+            .background(
+                RoundedRectangle(cornerRadius: SettingsChrome.cardCorner, style: .continuous)
+                    .fill(SettingsChrome.cardFill))
+            .overlay(
+                RoundedRectangle(cornerRadius: SettingsChrome.cardCorner, style: .continuous)
+                    .strokeBorder(SettingsChrome.cardBorder, lineWidth: SettingsChrome.hairline))
+
             SettingsSection(title: "DockIt", anchor: SettingsAnchor.build) {
                 SettingsRow(title: "Version") {
                     Text(version)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+                SettingsRow(title: "Source code", subtitle: "github.com/kdbaustert/DockIt") {
+                    Link("View on GitHub", destination: URL(string: "https://github.com/kdbaustert/DockIt")!)
                 }
                 SettingsRow(title: "Quit DockIt", subtitle: "Asks whether to bring the macOS Dock back first.") {
                     Button("Quit…") { NSApp.terminate(nil) }

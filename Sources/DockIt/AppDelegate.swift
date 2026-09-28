@@ -9,6 +9,9 @@ enum DockitApp {
         // NSApp holds its delegate weakly; this local lives as long as `run()`, which never returns.
         let delegate = AppDelegate()
         app.delegate = delegate
+        // In code, not `LSUIElement` in Info.plist: with that key, macOS still took the menu bar
+        // away while Settings had switched the app to `.regular`. Set before `run()`, so no Dock
+        // icon appears at launch either way.
         app.setActivationPolicy(.accessory)
         app.run()
     }
@@ -82,6 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .followPointer, .primary: [first]
         }
         controllers = targets.map { DockController(model: model, settings: settings, screen: $0) }
+    }
+
+    /// Opening DockIt again while it runs — Finder, Spotlight, Launchpad — shows Settings: with no
+    /// window and possibly no menu-bar icon, there is otherwise nothing to show that it heard.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        SettingsWindow.show()
+        return false
     }
 
     /// Asks whether to bring the macOS Dock back. Not at logout or shutdown: nobody is there to

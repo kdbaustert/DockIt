@@ -179,6 +179,12 @@ final class WidgetsModel {
         var label: String {
             [name, region, country].filter { !$0.isEmpty }.joined(separator: ", ")
         }
+        /// City and state — what the dock shows. The country only helps tell hits apart in the list.
+        var placeName: String { Self.placeName(name, region: region, country: country) }
+
+        nonisolated static func placeName(_ name: String, region: String, country: String) -> String {
+            [name, region.isEmpty ? country : region].filter { !$0.isEmpty }.joined(separator: ", ")
+        }
     }
 
     /// The geocoder's best matches for a partial name — what the Settings search list shows.
@@ -209,7 +215,10 @@ final class WidgetsModel {
               let first = (json["results"] as? [[String: Any]])?.first,
               let latitude = first["latitude"] as? Double, let longitude = first["longitude"] as? Double
         else { return nil }
-        return Located(name: first["name"] as? String ?? place, latitude: latitude, longitude: longitude)
+        let name = City.placeName(
+            first["name"] as? String ?? place, region: first["admin1"] as? String ?? "",
+            country: first["country"] as? String ?? "")
+        return Located(name: name, latitude: latitude, longitude: longitude)
     }
 
     private nonisolated static func forecast(latitude: Double, longitude: Double, fahrenheit: Bool) async -> Current? {
