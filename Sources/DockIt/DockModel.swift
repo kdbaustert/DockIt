@@ -53,8 +53,8 @@ private let dragType = UTType(exportedAs: "dev.kennyb.dockit.item")
 @MainActor
 @Observable
 final class DockModel {
-    static let finderPath = "/System/Library/CoreServices/Finder.app"
-    static let finderID = key(URL(fileURLWithPath: finderPath))
+    nonisolated static let finderPath = "/System/Library/CoreServices/Finder.app"
+    nonisolated static let finderID = key(URL(fileURLWithPath: finderPath))
     static let dropTypes: [UTType] = [.fileURL, dragType]
 
     private(set) var items: [DockItem] = []
@@ -65,6 +65,8 @@ final class DockModel {
     private(set) var minimizedThumbs: [CGWindowID: NSImage] = [:]
     /// Item ids of apps between starting to launch and finishing — their icons bounce.
     private(set) var launching: Set<String> = []
+    /// Each app's badge — an unread count, usually — by item id.
+    private(set) var badges: [String: String] = [:]
 
     @ObservationIgnored let settings: DockSettings
     @ObservationIgnored private var icons: [String: NSImage] = [:]
@@ -143,6 +145,7 @@ final class DockModel {
                 self.refreshTrash()
                 self.rebuildIfRunningAppsChanged()
                 self.refreshMinimizedWindows(frontmostOnly: self.maintenanceBeats % 15 != 0)
+                self.refreshBadges()
             }
         }
         maintenanceTimer.tolerance = 0.5
@@ -341,6 +344,52 @@ final class DockModel {
                 minimizedThumbs[window.id] = NSImage(cgImage: image, size: .zero)
             }
         }
+    }
+
+    /// Apps set their badge on their Dock tile, and macOS hands it to the real Dock, which is still
+    /// running under DockIt, only hidden. That Dock lists each tile over Accessibility with the badge
+    /// as `AXStatusLabel` beside the app's `AXURL`, so this reads them back. Measured: one sweep of
+    /// 23 tiles takes about a millisecond, and a new badge shows there within a second or two.
+    private func refreshBadges() {
+        guard AXIsProcessTrusted(),
+              let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+        else {
+            if !badges.isEmpty { badges = [:] }
+            return
+        }
+        let element = AXUIElementCreateApplication(dock.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.3)
+        var tiles: [(url: URL?, label: String?)] = []
+        for list in Self.children(of: element) {
+            for tile in Self.children(of: list) {
+                var values: CFArray?
+                guard AXUIElementCopyMultipleAttributeValues(
+                    tile, [kAXURLAttribute, "AXStatusLabel"] as CFArray, [], &values) == .success,
+                    let values = values as? [Any], values.count == 2
+                else { continue }
+                tiles.append((values[0] as? URL, values[1] as? String))
+            }
+        }
+        let found = Self.badges(from: tiles)
+        if found != badges { badges = found }
+    }
+
+    /// The badges by item id. Only apps' tiles carry a URL; an empty label is no badge. Pure, for the
+    /// tests.
+    nonisolated static func badges(from tiles: [(url: URL?, label: String?)]) -> [String: String] {
+        var out: [String: String] = [:]
+        for tile in tiles {
+            guard let url = tile.url, url.isFileURL, let label = tile.label, !label.isEmpty else { continue }
+            out[key(url)] = label
+        }
+        return out
+    }
+
+    private static func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success
+        else { return [] }
+        return value as? [AXUIElement] ?? []
     }
 
     func icon(for item: DockItem) -> NSImage {
@@ -585,26 +634,35 @@ final class DockModel {
     /// Pins the app at `path` immediately before `target`, or at the end of the pinned apps. Moving an
     /// already pinned app is the same operation: take it out, put it back in.
     func place(_ path: String, before target: DockItem?) {
+        guard let pinned = Self.placed(path, before: target, in: settings.pinnedApps) else { return }
+        settings.pinnedApps = pinned
+        let id = Self.pinnedID(path)
+        // Pinning is an explicit ask to see the app, so it overrides an earlier Hide from Dock.
+        settings.hiddenApps.removeAll { Self.key(URL(fileURLWithPath: $0)) == id }
+    }
+
+    /// `place`'s list work: the pinned list with `path` moved or added before `target`, or nil when
+    /// the drop changes nothing. Pure, for the tests.
+    nonisolated static func placed(_ path: String, before target: DockItem?, in pinnedApps: [String]) -> [String]? {
         let isSpacer = path.hasPrefix(spacerPrefix)
-        let id = isSpacer ? path : Self.key(URL(fileURLWithPath: path))
-        guard path.hasSuffix(".app") || isSpacer, id != Self.finderID, id != target?.id else { return }
-        var pinned = settings.pinnedApps.filter {
-            ($0.hasPrefix(spacerPrefix) ? $0 : Self.key(URL(fileURLWithPath: $0))) != id
-        }
+        let id = pinnedID(path)
+        guard path.hasSuffix(".app") || isSpacer, id != finderID, id != target?.id else { return nil }
+        var pinned = pinnedApps.filter { pinnedID($0) != id }
         var index = pinned.count
         if let target, target.kind == .app || target.kind == .spacer, target.isPinned {
-            if target.id == Self.finderID {
+            if target.id == finderID {
                 index = 0
-            } else if let found = pinned.firstIndex(where: {
-                ($0.hasPrefix(spacerPrefix) ? $0 : Self.key(URL(fileURLWithPath: $0))) == target.id
-            }) {
+            } else if let found = pinned.firstIndex(where: { pinnedID($0) == target.id }) {
                 index = found
             }
         }
         pinned.insert(path, at: index)
-        settings.pinnedApps = pinned
-        // Pinning is an explicit ask to see the app, so it overrides an earlier Hide from Dock.
-        settings.hiddenApps.removeAll { Self.key(URL(fileURLWithPath: $0)) == id }
+        return pinned
+    }
+
+    /// A `pinnedApps` entry's item id: a spacer is its own id, an app its resolved path.
+    private nonisolated static func pinnedID(_ entry: String) -> String {
+        entry.hasPrefix(spacerPrefix) ? entry : key(URL(fileURLWithPath: entry))
     }
 
     // MARK: - Drag and drop
@@ -694,7 +752,7 @@ final class DockModel {
 
     /// Paths compare after symlinks resolve: a bundle URL and a pinned path can name the same app
     /// through different routes.
-    static func key(_ url: URL) -> String {
+    nonisolated static func key(_ url: URL) -> String {
         url.resolvingSymlinksInPath().standardizedFileURL.path
     }
 

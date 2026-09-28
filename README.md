@@ -18,6 +18,8 @@ sight.
 
 - **Pinned and running apps**, with Finder always first and the Trash at the end. Drag icons to
   reorder them, drop apps on the dock to pin them, and drop files on an app to open them with it.
+- **Badges.** Unread counts from Mail, Messages, Slack and other apps show on their icons, as
+  they do in the macOS Dock.
 - **Window previews.** Rest the pointer on a running app to see its windows, then click one to go
   to it, even on another Desktop or display.
 - **Minimized windows** sit beside the Trash as their own snapshot tiles, as in the macOS Dock.
@@ -33,6 +35,8 @@ sight.
   running-app dots.
 - **Settings sync** through iCloud Drive, plus import and export.
 - **Automatic updates** through Sparkle.
+- **VoiceOver.** Every icon, minimized window and widget is labelled and can be pressed, and the
+  now playing widget offers next and previous track actions.
 
 ## Requirements
 
@@ -54,7 +58,7 @@ DockIt asks for these when it first needs them. You can review them under **Sett
 Permissions**.
 
 - **Screen Recording** to show window previews.
-- **Accessibility** to restore, close and switch to specific windows.
+- **Accessibility** to restore, close and switch to specific windows, and to show app badges.
 - **Automation** to control Finder (emptying the Trash) and Spotify or Music (the now playing
   widget).
 

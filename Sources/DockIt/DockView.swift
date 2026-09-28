@@ -32,6 +32,7 @@ struct DockView: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .accessibilityLabel("Dock")
                 .contextMenu {
                     Button("Add Spacer") { model.addSpacer() }
                     Divider()
@@ -90,6 +91,9 @@ private struct DockIcon: View {
             .resizable()
             .interpolation(.high)
             .frame(width: size, height: size)
+            .overlay(alignment: .topTrailing) {
+                if let badge = model.badges[item.id] { BadgeView(text: badge, iconSize: size) }
+            }
             // Bounces away from the screen edge while the app launches. Before the highlight and
             // label: an offset moves what is drawn, not the frame, so those stay put and only the
             // icon itself jumps. When `repeating` goes false the track freezes wherever it is, so
@@ -145,6 +149,23 @@ private struct DockIcon: View {
             }
             .onDrag { model.dragPayload(for: item) }
             .onDrop(of: DockModel.dropTypes, isTargeted: $isTargeted) { model.handleDrop($0, onto: item) }
+            // One element per icon, read by its name: the hover label and the badge are drawn
+            // children, and would otherwise be read out as separate items.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.name)
+            .accessibilityValue(accessibilityValue)
+            .accessibilityAddTraits(.isButton)
+            // The tap gesture is not an action VoiceOver can press; this is.
+            .accessibilityAction { model.open(item) }
+    }
+
+    private var accessibilityValue: String {
+        var parts: [String] = []
+        if item.kind == .app, item.isRunning { parts.append("running") }
+        if isBouncing { parts.append("launching") }
+        if let badge = model.badges[item.id] { parts.append("badge \(badge)") }
+        if item.kind == .trash, model.trashIsFull { parts.append("full") }
+        return parts.joined(separator: ", ")
     }
 
     /// The name, beside the icon on the side away from the screen edge. The overlay puts a zero-size
@@ -179,6 +200,7 @@ private struct SeparatorView: View {
             .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
             .contentShape(Rectangle())
             .contextMenu { DockMenuFooter() }
+            .accessibilityHidden(true)
     }
 }
 
@@ -299,6 +321,8 @@ private struct SpacerTile: View {
                     .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
             }
             .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+            // An invisible gap, and nothing to press.
+            .accessibilityHidden(true)
     }
 }
 
@@ -335,6 +359,16 @@ private struct MinimizedTile: View {
             Divider()
             DockMenuFooter()
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.open(item) }
+    }
+
+    /// The window's title and whose it is — a title alone ("Untitled") says little.
+    private var accessibilityLabel: String {
+        let app = item.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
+        return ["Minimized window", item.name.isEmpty ? nil : item.name, app].compactMap(\.self).joined(separator: ", ")
     }
 }
 
@@ -379,6 +413,13 @@ private struct NowPlayingTile: View {
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
         .contentShape(Rectangle())
         .onTapGesture { widgets.playPause() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Now Playing")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { widgets.playPause() }
+        .accessibilityAction(named: "Next Track") { widgets.nextTrack() }
+        .accessibilityAction(named: "Previous Track") { widgets.previousTrack() }
         .contextMenu {
             Button("Play/Pause") { widgets.playPause() }
             Button("Next Track") { widgets.nextTrack() }
@@ -389,6 +430,12 @@ private struct NowPlayingTile: View {
             Divider()
             DockMenuFooter()
         }
+    }
+
+    private var accessibilityValue: String {
+        guard let title = widgets.trackTitle else { return "Nothing playing" }
+        let track = widgets.trackArtist.isEmpty ? title : "\(title) by \(widgets.trackArtist)"
+        return "\(track), \(widgets.isPlaying ? "playing" : "paused")"
     }
 }
 
@@ -417,6 +464,14 @@ private struct WeatherTile: View {
         .padding(.horizontal, 7)
         .frame(width: width, height: height)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        // The symbol is decoration here; the words carry it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Weather")
+        // Without a role the element is AXUnknown, and its value was never read out (measured).
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityValue(
+            [widgets.weatherTemperature, widgets.weatherPlace, widgets.weatherHighLow]
+                .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ", "))
         .contextMenu {
             // The same setting as Settings ▸ Widgets ▸ Weather.
             Button("Remove from Dock") { DockSettings.shared.showsWeather = false }
@@ -441,12 +496,33 @@ private struct ClockTile: View {
         }
         .frame(width: width, height: height)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
+        .accessibilityElement(children: .combine)
         .contextMenu {
             // The same setting as Settings ▸ Widgets ▸ Clock.
             Button("Remove from Dock") { DockSettings.shared.showsClock = false }
             Divider()
             DockMenuFooter()
         }
+    }
+}
+
+/// The red count in an icon's corner, as the macOS Dock draws it: sized from the icon, never
+/// narrower than a circle, and hanging a little past the corner.
+private struct BadgeView: View {
+    let text: String
+    let iconSize: CGFloat
+
+    var body: some View {
+        let height = iconSize * 0.36
+        Text(text)
+            .font(.system(size: height * 0.62, weight: .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.horizontal, height * 0.28)
+            .frame(minWidth: height, minHeight: height)
+            .background(Capsule().fill(.red))
+            .fixedSize()
+            .offset(x: height * 0.2, y: -height * 0.12)
     }
 }
 

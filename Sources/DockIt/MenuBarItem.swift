@@ -26,7 +26,7 @@ final class MenuBarItem {
     private func install() {
         guard item == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "dock.rectangle", accessibilityDescription: "DockIt")
+        item.button?.image = Self.icon()
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem("DockIt Settings…") { SettingsWindow.show() })
         // Aimed at the controller's own action, which also validates the item: it greys out while a
@@ -42,6 +42,31 @@ final class MenuBarItem {
         menu.addItem(ClosureMenuItem("Quit DockIt") { NSApp.terminate(nil) })
         item.menu = menu
         self.item = item
+    }
+
+    /// A screen with its dock along the bottom edge, the middle tile magnified. Drawn rather than
+    /// bundled because build.sh copies only the .icns into Resources, and a template image lets the
+    /// system tint it for light, dark and highlighted menu bars.
+    private static func icon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.set()
+            let screen = NSBezierPath(
+                roundedRect: NSRect(x: 1, y: 2, width: 16, height: 14), xRadius: 3, yRadius: 3)
+            screen.lineWidth = 1.5
+            screen.stroke()
+            let tiles = [
+                NSRect(x: 4.2, y: 4.2, width: 2.6, height: 2.6),
+                NSRect(x: 7.4, y: 4.2, width: 3.2, height: 4.2),
+                NSRect(x: 11.2, y: 4.2, width: 2.6, height: 2.6),
+            ]
+            for tile in tiles {
+                NSBezierPath(roundedRect: tile, xRadius: 0.8, yRadius: 0.8).fill()
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "DockIt"
+        return image
     }
 
     private func remove() {

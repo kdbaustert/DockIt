@@ -454,7 +454,7 @@ private struct GeneralPane: View {
             }
             SettingsSection(
                 title: "Permissions", anchor: SettingsAnchor.permissions,
-                footer: "Previews picture other apps' windows (Screen Recording); restoring and closing windows steers them (Accessibility)."
+                footer: "Previews picture other apps' windows (Screen Recording); restoring and closing windows steers them, and app badges are read from the macOS Dock (Accessibility)."
             ) {
                 PermissionRow(
                     title: "Screen Recording", granted: permissions.screenRecording,
