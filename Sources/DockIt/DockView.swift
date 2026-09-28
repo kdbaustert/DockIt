@@ -83,6 +83,8 @@ private struct DockIcon: View {
     let model: DockModel
     @State private var isTargeted = false
 
+    private var isBouncing: Bool { model.settings.bouncesOnLaunch && model.launching.contains(item.id) }
+
     var body: some View {
         Image(nsImage: model.icon(for: item))
             .resizable()
@@ -90,10 +92,12 @@ private struct DockIcon: View {
             .frame(width: size, height: size)
             // Bounces away from the screen edge while the app launches. Before the highlight and
             // label: an offset moves what is drawn, not the frame, so those stay put and only the
-            // icon itself jumps. When `repeating` goes false the track holds its start value, 0.
-            .keyframeAnimator(initialValue: CGFloat(0), repeating: model.settings.bouncesOnLaunch && model.launching.contains(item.id)) {
-                [edge] icon, lift in
-                icon.offset(edge.hiddenOffset(-lift))
+            // icon itself jumps. When `repeating` goes false the track freezes wherever it is, so
+            // the lift applies only while bouncing: a launch that ended on the timeout, mid-cycle,
+            // left the icon hanging half an icon up until DockIt restarted.
+            .keyframeAnimator(initialValue: CGFloat(0), repeating: isBouncing) {
+                [edge, isBouncing] icon, lift in
+                icon.offset(edge.hiddenOffset(isBouncing ? -lift : 0))
             } keyframes: { [bounce = model.metrics.iconSize * 0.5] _ in
                 // A thrown ball, as the macOS Dock's launch bounce moves: decelerating to the top,
                 // accelerating back down, and straight into the next with no rest between. Height
