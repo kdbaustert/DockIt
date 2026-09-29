@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>DockPlus</title>
+        <item>
+            <title>0.1.0-beta.1</title>
+            <pubDate>Tue, 29 Sep 2026 20:31:32 +0000</pubDate>
+            <sparkle:fullReleaseNotesLink>https://github.com/kdbaustert/DockPlus/releases/tag/v0.1.0-beta.1</sparkle:fullReleaseNotesLink>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>0.1.0-beta.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/kdbaustert/DockPlus/releases/download/v0.1.0-beta.1/DockPlus-0.1.0-beta.1.zip" length="4317527" type="application/octet-stream" sparkle:edSignature="s70Pd7BPBtS7o/b2b39cSom5jazKEAekwugR3VaMDhCuxTqdEKcRzS53AOgMMRc6dO7RZ/dr0wTxxSSxgtIgBg=="/>
+        </item>
+    </channel>
+</rss>
