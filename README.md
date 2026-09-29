@@ -1,17 +1,17 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" height="128" alt="DockIt icon">
+  <img src="docs/icon.png" width="128" height="128" alt="DockPlus icon">
 </p>
 
-<h1 align="center">DockIt</h1>
+<h1 align="center">DockPlus</h1>
 
 <p align="center">A Dock replacement for macOS.</p>
 
 <p align="center">
-  <img src="docs/dock.png" alt="The DockIt dock: pinned apps, the Trash, and the now playing, weather and clock widgets">
+  <img src="docs/dock.png" alt="The DockPlus dock: pinned apps, the Trash, and the now playing, weather and clock widgets">
 </p>
 
-DockIt draws its own Liquid Glass dock and keeps the macOS Dock hidden. The system Dock stays
-running, because it also draws Cmd-Tab, Mission Control and Spaces; DockIt just keeps it out of
+DockPlus draws its own Liquid Glass dock and keeps the macOS Dock hidden. The system Dock stays
+running, because it also draws Cmd-Tab, Mission Control and Spaces; DockPlus just keeps it out of
 sight.
 
 ## Features
@@ -48,16 +48,16 @@ macOS 26 or later, on Apple silicon or Intel.
 ## Install
 
 Download the latest release from
-[Releases](https://github.com/kdbaustert/DockIt/releases), unzip it, and move `DockIt.app` to
-`/Applications`. DockIt checks for updates daily and installs them when you ask.
+[Releases](https://github.com/kdbaustert/DockPlus/releases), unzip it, and move `DockPlus.app` to
+`/Applications`. DockPlus checks for updates daily and installs them when you ask.
 
 Releases are not notarized yet, so the first launch needs right-click → **Open**, or
-`xattr -cr /Applications/DockIt.app` in Terminal. Updates after that arrive through Sparkle, which
+`xattr -cr /Applications/DockPlus.app` in Terminal. Updates after that arrive through Sparkle, which
 checks each one against the release signing key.
 
 ### Permissions
 
-DockIt asks for these when it first needs them. You can review them under **Settings › General ›
+DockPlus asks for these when it first needs them. You can review them under **Settings › General ›
 Permissions**.
 
 - **Screen Recording** to show window previews.
@@ -68,7 +68,7 @@ Permissions**.
 
 ## Privacy
 
-No telemetry, analytics, crash reporting, or account. DockIt makes only these network requests:
+No telemetry, analytics, crash reporting, or account. DockPlus makes only these network requests:
 
 - The daily update check, which fetches the release feed from GitHub Pages and sends nothing
   about you or your Mac.
@@ -76,7 +76,7 @@ No telemetry, analytics, crash reporting, or account. DockIt makes only these ne
   [Open-Meteo](https://open-meteo.com) to look up its forecast. The widget is off by default.
 
 The calendar widget reads today's events on your Mac to show the next one. Nothing from your
-calendars leaves your Mac, and DockIt asks for access only when you turn the widget on. The recent
+calendars leaves your Mac, and DockPlus asks for access only when you turn the widget on. The recent
 apps list is kept on your Mac and is not synced through iCloud with your other settings.
 
 ## Contributing
@@ -84,7 +84,7 @@ apps list is kept on your Mac and is not synced through iCloud with your other s
 Issues and pull requests are welcome. To build and test:
 
 ```sh
-./build.sh            # builds build/DockIt.app
+./build.sh            # builds build/DockPlus.app
 ./build.sh --install  # also copies it to /Applications and relaunches it
 swift test            # the test suite; CI runs it on every push and pull request
 ```
@@ -94,6 +94,6 @@ never updates itself.
 
 ## License
 
-DockIt is licensed under the [GNU General Public License v3.0](LICENSE).
+DockPlus is licensed under the [GNU General Public License v3.0](LICENSE).
 
 Built by [@kdbaustert](https://github.com/kdbaustert).

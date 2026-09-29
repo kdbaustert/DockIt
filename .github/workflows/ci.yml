@@ -49,9 +49,9 @@ jobs:
       - name: Check the app came out whole
         run: |
           set -euo pipefail
-          APP=build/DockIt.app
+          APP=build/DockPlus.app
           for path in \
-            "$APP/Contents/MacOS/DockIt" \
+            "$APP/Contents/MacOS/DockPlus" \
             "$APP/Contents/Info.plist" \
             "$APP/Contents/Resources/AppIcon.icns" \
             "$APP/Contents/Frameworks/Sparkle.framework"

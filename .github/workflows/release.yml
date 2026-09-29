@@ -72,7 +72,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          ASSET_NAME="DockIt-$VERSION.zip"
+          ASSET_NAME="DockPlus-$VERSION.zip"
           # Listed first, so a failed query stops the job rather than reading as "no release".
           TAGS="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
           if ! grep -Fx -- "$TAG" <<<"$TAGS" >/dev/null; then
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$REUSE" == "1" ]]; then
-            export EXISTING_ZIP="build/releases/DockIt-$VERSION.zip"
+            export EXISTING_ZIP="build/releases/DockPlus-$VERSION.zip"
           fi
           if [[ "$BETA" == "1" ]]; then
             ./release.sh --beta
@@ -198,7 +198,7 @@ jobs:
           REUSE: ${{ steps.existing.outputs.reuse }}
         run: |
           set -euo pipefail
-          ASSET="build/releases/DockIt-$VERSION.zip"
+          ASSET="build/releases/DockPlus-$VERSION.zip"
           [[ -f "$ASSET" ]] || { echo "::error::missing $ASSET"; exit 1; }
           if [[ "$REUSE" == "1" ]]; then
             echo "$TAG is already released with this zip."
@@ -213,10 +213,10 @@ jobs:
           if [[ "$BETA" == "1" ]]; then
             PRERELEASE=(--prerelease --latest=false)
           fi
-          NOTES=$'This build is ad-hoc signed, not notarised — there is no Apple Developer Program\nmembership behind it yet. macOS Gatekeeper will call the download damaged or from an\nunidentified developer on first launch. To open it: right-click DockIt.app → Open, or run\n`xattr -cr /path/to/DockIt.app` in Terminal.\n\n'
+          NOTES=$'This build is ad-hoc signed, not notarised — there is no Apple Developer Program\nmembership behind it yet. macOS Gatekeeper will call the download damaged or from an\nunidentified developer on first launch. To open it: right-click DockPlus.app → Open, or run\n`xattr -cr /path/to/DockPlus.app` in Terminal.\n\n'
           # --generate-notes adds the changes since the last tag after the notice above.
           gh release create "$TAG" "$ASSET" \
-            --title "DockIt $VERSION" \
+            --title "DockPlus $VERSION" \
             --notes "$NOTES" \
             --generate-notes \
             ${PRERELEASE[@]+"${PRERELEASE[@]}"}
@@ -245,7 +245,7 @@ jobs:
 
           WORKTREE="$RUNNER_TEMP/pages"
           for attempt in 1 2 3 4 5; do
-            EXISTING_ZIP="build/releases/DockIt-$VERSION.zip" ./release.sh ${ARGS[@]+"${ARGS[@]}"}
+            EXISTING_ZIP="build/releases/DockPlus-$VERSION.zip" ./release.sh ${ARGS[@]+"${ARGS[@]}"}
 
             git worktree remove --force "$WORKTREE" > /dev/null 2>&1 || true
             # An orphan branch: the feed has no relationship to the source history, and carrying the
@@ -270,7 +270,7 @@ jobs:
               echo "Appcast unchanged."
               exit 0
             fi
-            git -C "$WORKTREE" commit -m "Appcast: DockIt $VERSION"
+            git -C "$WORKTREE" commit -m "Appcast: DockPlus $VERSION"
             if git -C "$WORKTREE" push origin gh-pages; then
               exit 0
             fi
@@ -314,7 +314,7 @@ jobs:
             exit 0
           fi
           COMMIT=$(gh api -X PUT "repos/$REPO/contents/$FILE" \
-            -f message="Record DockIt $VERSION ($BUILD) in Info.plist" \
+            -f message="Record DockPlus $VERSION ($BUILD) in Info.plist" \
             -f content="$(base64 -i "$PLIST")" \
             -f sha="$SHA" \
             -f branch="$BRANCH" \

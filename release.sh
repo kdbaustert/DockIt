@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds a DockIt release: the app, its zip, and the update feed with this release added.
+# Builds a DockPlus release: the app, its zip, and the update feed with this release added.
 #
 # Releases are published by GitHub Actions when a version tag is pushed — see
 # .github/workflows/release.yml — the same way as Cmd-Tab's. This script is the build half that
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-APP="build/DockIt.app"
+APP="build/DockPlus.app"
 RELEASES="build/releases"
 STAGING="build/appcast-staging"
 BETA=0
@@ -49,7 +49,7 @@ if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-ARCHIVE="DockIt-$VERSION.zip"
+ARCHIVE="DockPlus-$VERSION.zip"
 ZIP="$RELEASES/$ARCHIVE"
 if [[ -n "${EXISTING_ZIP:-}" ]]; then
     if [[ ! -f "$EXISTING_ZIP" ]]; then
@@ -58,7 +58,7 @@ if [[ -n "${EXISTING_ZIP:-}" ]]; then
     fi
     ZIP="$EXISTING_ZIP"
     ZIP_PLIST="$(mktemp)"
-    unzip -p "$ZIP" DockIt.app/Contents/Info.plist > "$ZIP_PLIST"
+    unzip -p "$ZIP" DockPlus.app/Contents/Info.plist > "$ZIP_PLIST"
     ZIP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ZIP_PLIST")"
     BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ZIP_PLIST")"
     rm -f "$ZIP_PLIST"
@@ -202,8 +202,8 @@ else
     # already published, which the build number check above exists to prevent.
     status=0
     output="$("$GENERATE_APPCAST" ${APPCAST_ARGS[@]+"${APPCAST_ARGS[@]}"} \
-        --download-url-prefix "https://github.com/kdbaustert/DockIt/releases/download/v$VERSION/" \
-        --full-release-notes-url "https://github.com/kdbaustert/DockIt/releases/tag/v$VERSION" \
+        --download-url-prefix "https://github.com/kdbaustert/DockPlus/releases/download/v$VERSION/" \
+        --full-release-notes-url "https://github.com/kdbaustert/DockPlus/releases/tag/v$VERSION" \
         --maximum-deltas 0 \
         "$STAGING" 2>&1)" || status=$?
     printf '%s\n' "$output"

@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>DockIt</string>
+	<string>DockPlus</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.kennyb.dockit</string>
+	<string>dev.kennyb.dockplus</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>DockIt</string>
+	<string>DockPlus</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,10 +25,10 @@
 	     to it; the releases themselves carry only the zip. build.sh deletes this key from local
 	     builds, so a development copy never updates itself out from under its developer. -->
 	<key>SUFeedURL</key>
-	<string>https://kdbaustert.github.io/DockIt/appcast.xml</string>
+	<string>https://kdbaustert.github.io/DockPlus/appcast.xml</string>
 	<!-- The public half of the EdDSA key every release is signed with (the same key as Cmd-Tab's
 	     and FinderPlus's; one key serves every app). Sparkle checks each download against it before
-	     unpacking, so nobody else can ship DockIt's users an update. The private half is in the
+	     unpacking, so nobody else can ship DockPlus's users an update. The private half is in the
 	     login keychain, where release.sh's generate_appcast reads it. -->
 	<key>SUPublicEDKey</key>
 	<string>FYMMALSs2mAccV/rUgQcByyY+mdkpXSBA/nD4JpwvT0=</string>
@@ -44,19 +44,19 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>DockIt asks Finder to empty the Trash, and Spotify or Music what is playing for the Now Playing widget.</string>
+	<string>DockPlus asks Finder to empty the Trash, and Spotify or Music what is playing for the Now Playing widget.</string>
 	<!-- Asked for only when the Calendar widget is turned on. No entitlement goes with it: build.sh
 	     signs without the hardened runtime, which is what would require
 	     com.apple.security.personal-information.calendars. -->
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>DockIt shows your next event today in the Calendar widget.</string>
+	<string>DockPlus shows your next event today in the Calendar widget.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>dev.kennyb.dockit.item</string>
+			<string>dev.kennyb.dockplus.item</string>
 			<key>UTTypeDescription</key>
-			<string>DockIt Item</string>
+			<string>DockPlus Item</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

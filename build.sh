@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds DockIt.app. Pass --install to copy it into /Applications and launch it.
+# Builds DockPlus.app. Pass --install to copy it into /Applications and launch it.
 #
 # Environment (release.sh sets the first two):
 #   RELEASE=1          keep the update feed in Info.plist; without it the feed is removed, so a
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-APP="build/DockIt.app"
+APP="build/DockPlus.app"
 
 # A release is universal: macOS 26 still runs on some Intel Macs. A local build stays native, at
 # half the compile time.
@@ -20,14 +20,14 @@ fi
 echo "==> Compiling"
 # ${a[@]+...}: macOS ships bash 3.2, where an empty array under `set -u` is an error.
 swift build -c release ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"}
-BIN="$(swift build -c release ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} --show-bin-path)/DockIt"
+BIN="$(swift build -c release ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} --show-bin-path)/DockPlus"
 
 echo "==> Assembling bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/DockIt"
+cp "$BIN" "$APP/Contents/MacOS/DockPlus"
 if [[ "${RELEASE:-0}" == "1" ]]; then
-    ARCHS="$(lipo -archs "$APP/Contents/MacOS/DockIt")"
+    ARCHS="$(lipo -archs "$APP/Contents/MacOS/DockPlus")"
     if [[ " $ARCHS " != *" arm64 "* || " $ARCHS " != *" x86_64 "* ]]; then
         echo "==> ERROR: the release binary is '$ARCHS', not universal (arm64 and x86_64)" >&2
         exit 1
@@ -51,8 +51,8 @@ mkdir -p "$APP/Contents/Frameworks"
 cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
 # Only when missing: -add_rpath refuses a duplicate. grep without -q reads otool to the end, since
 # under pipefail an early exit would fail the pipeline.
-if ! otool -l "$APP/Contents/MacOS/DockIt" | grep -F -- '@executable_path/../Frameworks' >/dev/null; then
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/DockIt"
+if ! otool -l "$APP/Contents/MacOS/DockPlus" | grep -F -- '@executable_path/../Frameworks' >/dev/null; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/DockPlus"
 fi
 
 if [[ -n "${VERSION:-}" ]]; then
@@ -102,22 +102,22 @@ if [[ "${1:-}" == "--install" ]]; then
     echo "==> Installing to /Applications"
     # Copied beside the old copy first, so a failed copy leaves it installed; only the rename below
     # runs with no app in place. Not named *.app, so nothing registers the half-copied bundle. And
-    # before DockIt is stopped: a copy that failed after the kill (disk full, no write access) left
+    # before DockPlus is stopped: a copy that failed after the kill (disk full, no write access) left
     # the old copy installed but not running, and the macOS Dock hidden — no dock at all.
-    STAGED="/Applications/.DockIt-installing"
+    STAGED="/Applications/.DockPlus-installing"
     rm -rf "$STAGED"
     cp -R "$APP" "$STAGED"
     # SIGTERM, not `quit app`: a real quit restores the macOS Dock, and the relaunch below would
-    # hide it again — two Dock restarts per install. Killed, DockIt leaves the Dock hidden and its
+    # hide it again — two Dock restarts per install. Killed, DockPlus leaves the Dock hidden and its
     # saved originals in place, and the new copy finds nothing to change.
-    pkill -x DockIt 2>/dev/null || true
+    pkill -x DockPlus 2>/dev/null || true
     for _ in $(seq 1 30); do
-        pgrep -x DockIt >/dev/null 2>&1 || break
+        pgrep -x DockPlus >/dev/null 2>&1 || break
         sleep 0.1
     done
-    pkill -9 -x DockIt 2>/dev/null || true
-    rm -rf /Applications/DockIt.app
-    mv "$STAGED" /Applications/DockIt.app
-    open /Applications/DockIt.app
+    pkill -9 -x DockPlus 2>/dev/null || true
+    rm -rf /Applications/DockPlus.app
+    mv "$STAGED" /Applications/DockPlus.app
+    open /Applications/DockPlus.app
     echo "==> Launched."
 fi
