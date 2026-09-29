@@ -4,7 +4,7 @@ struct WidgetsPane: View {
     @Bindable var settings: DockSettings
 
     var body: some View {
-        SettingsPage(title: "Widgets", subtitle: "Add widgets and spacers to the dock, or take them off.") {
+        SettingsPage(title: "Widgets", subtitle: "Add widgets, spacers and dividers to the dock, or take them off.") {
             SettingsSection(
                 title: "Widgets", anchor: SettingsAnchor.widgets,
                 footer: "Drag a widget into your dock, or click to add it; click again to take it off. Widgets sit at the end of the bar, beside the Trash, and show when the dock is at the bottom. Now playing asks macOS once for permission to control each player, and the calendar asks for access to your calendars."
@@ -22,18 +22,16 @@ struct WidgetsPane: View {
                 CalendarAccessRow(settings: settings)
             }
             SettingsSection(
-                title: "Spacers", anchor: SettingsAnchor.spacers,
-                footer: "A spacer is added after the pinned apps; drag it to where you want the gap. Right-click one in the dock to remove just that one."
+                title: "Layout", anchor: SettingsAnchor.spacers,
+                footer: "Drag a spacer or divider to where you want it in the dock, or click to add one after the pinned apps and drag it from there. Right-click one in the dock to remove just that one."
             ) {
+                LayoutGallery(settings: settings)
                 SettingsRow(
-                    title: "Spacers on the dock",
+                    title: "Spacers and dividers on the dock",
                     subtitle: settings.spacerCount == 0 ? "None." : "\(settings.spacerCount) on the dock."
                 ) {
-                    HStack(spacing: 8) {
-                        Button("Add Spacer") { settings.addSpacer() }
-                        Button("Remove All") { settings.removeAllSpacers() }
-                            .disabled(settings.spacerCount == 0)
-                    }
+                    Button("Remove All") { settings.removeAllSpacers() }
+                        .disabled(settings.spacerCount == 0)
                 }
             }
         }
@@ -69,26 +67,7 @@ private struct WidgetGallery: View {
 
     private func card(_ name: String, title: String, width: CGFloat) -> some View {
         let isOn = DockSettings.widgetSwitches[name].map { settings[keyPath: $0] } ?? false
-        return VStack(spacing: 8) {
-            tile(name, width: width)
-                .frame(maxWidth: .infinity, minHeight: 80)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(SettingsChrome.cardFill))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
-                            isOn ? Color.accentColor : SettingsChrome.cardBorder,
-                            lineWidth: isOn ? 1.5 : SettingsChrome.hairline))
-                .overlay(alignment: .topTrailing) {
-                    if isOn {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(Color.accentColor)
-                            .padding(6)
-                    }
-                }
-            Text(title).font(.system(size: 12, weight: .medium))
-        }
-        .contentShape(Rectangle())
+        return GalleryCard(title: title, isOn: isOn) { tile(name, width: width) }
         // A tap gesture rather than a Button: a button takes the mouse-down, and the drag never starts.
         .onTapGesture { toggle(name, isOn: isOn) }
         // The drag image is the tile alone, as it will look on the bar — not the card around it.
@@ -123,6 +102,83 @@ private struct WidgetGallery: View {
         } else {
             widgets.add(name)
         }
+    }
+}
+
+/// Spacers and dividers, as the bar draws them. There can be any number of each, so a click adds
+/// another rather than switching one off, and every drag carries a fresh entry.
+private struct LayoutGallery: View {
+    let settings: DockSettings
+
+    /// The bar's default proportions, as the widget cards use.
+    private static let metrics = DockMetrics()
+    private static var iconSize: CGFloat { metrics.iconSize }
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 14) {
+            card("Spacer", divider: false)
+            card("Divider", divider: true)
+        }
+        .padding(SettingsChrome.rowInset)
+    }
+
+    private func card(_ title: String, divider: Bool) -> some View {
+        GalleryCard(title: title, isOn: false) { shape(divider: divider) }
+            .onTapGesture { settings.addSpacer(divider: divider) }
+            .onDrag {
+                DockModel.dragPayload(forNewSpacer: DockSettings.newSpacer(divider: divider))
+            } preview: {
+                shape(divider: divider)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { settings.addSpacer(divider: divider) }
+    }
+
+    /// A divider is its line. A spacer is invisible on the bar, so it is outlined here instead: a
+    /// blank card says nothing about what it adds, and a blank drag image reads as a broken drag.
+    @ViewBuilder
+    private func shape(divider: Bool) -> some View {
+        if divider {
+            DividerLine(iconSize: Self.iconSize, horizontal: true)
+                .frame(width: Self.metrics.separatorExtent, height: Self.iconSize)
+        } else {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(.primary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .frame(width: Self.iconSize * 0.55, height: Self.iconSize)
+        }
+    }
+}
+
+/// A gallery card: the item as the bar draws it, on a rounded backing, with its name beneath.
+/// Outlined and checked while it is on the bar.
+private struct GalleryCard<Tile: View>: View {
+    let title: String
+    let isOn: Bool
+    @ViewBuilder let tile: Tile
+
+    var body: some View {
+        VStack(spacing: 8) {
+            tile
+                .frame(maxWidth: .infinity, minHeight: 80)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(SettingsChrome.cardFill))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            isOn ? Color.accentColor : SettingsChrome.cardBorder,
+                            lineWidth: isOn ? 1.5 : SettingsChrome.hairline))
+                .overlay(alignment: .topTrailing) {
+                    if isOn {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.accentColor)
+                            .padding(6)
+                    }
+                }
+            Text(title).font(.system(size: 12, weight: .medium))
+        }
+        .contentShape(Rectangle())
     }
 }
 

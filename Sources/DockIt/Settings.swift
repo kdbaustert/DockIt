@@ -320,12 +320,17 @@ final class DockSettings {
 
     // MARK: - Spacers
 
-    /// Spacers on the dock. They live in `pinnedApps` so they order and drag like apps do.
+    /// Spacers and dividers on the dock. They live in `pinnedApps` so they order and drag like apps do.
     var spacerCount: Int { pinnedApps.filter { $0.hasPrefix(spacerPrefix) }.count }
 
-    /// A new spacer at the end of the pinned apps; drag it from there to where it belongs.
-    func addSpacer() {
-        pinnedApps.append(spacerPrefix + UUID().uuidString)
+    /// A new spacer or divider at the end of the pinned apps; drag it from there to where it belongs.
+    func addSpacer(divider: Bool = false) {
+        pinnedApps.append(Self.newSpacer(divider: divider))
+    }
+
+    /// A fresh entry each time: two spacers with one id would be one item to the bar.
+    static func newSpacer(divider: Bool = false) -> String {
+        (divider ? dividerPrefix : spacerPrefix) + UUID().uuidString
     }
 
     func removeAllSpacers() {

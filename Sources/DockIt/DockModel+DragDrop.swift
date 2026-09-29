@@ -89,6 +89,12 @@ extension DockModel {
         ownProcessPayload(widgetIDPrefix + name)
     }
 
+    /// A spacer or divider dragged out of Settings' gallery, under a fresh entry: as for a widget,
+    /// the bar's drop handling places it where it lands.
+    static func dragPayload(forNewSpacer entry: String) -> NSItemProvider {
+        ownProcessPayload(entry)
+    }
+
     private static func ownProcessPayload(_ id: String) -> NSItemProvider {
         let provider = NSItemProvider()
         let payload = Data(id.utf8)

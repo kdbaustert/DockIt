@@ -35,6 +35,7 @@ struct DockView: View {
                 .accessibilityLabel("Dock")
                 .contextMenu {
                     Button("Add Spacer") { model.addSpacer() }
+                    Button("Add Divider") { model.addSpacer(divider: true) }
                     Divider()
                     DockMenuFooter()
                 }
@@ -214,13 +215,23 @@ private struct SeparatorView: View {
     let horizontal: Bool
 
     var body: some View {
-        Rectangle()
-            .fill(.primary.opacity(0.25))
-            .frame(width: horizontal ? 1 : iconSize * 0.75, height: horizontal ? iconSize * 0.75 : 1)
+        DividerLine(iconSize: iconSize, horizontal: horizontal)
             .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
             .contentShape(Rectangle())
             .contextMenu { DockMenuFooter() }
             .accessibilityHidden(true)
+    }
+}
+
+/// The separator's line, which a placed divider draws too.
+struct DividerLine: View {
+    let iconSize: CGFloat
+    let horizontal: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(.primary.opacity(0.25))
+            .frame(width: horizontal ? 1 : iconSize * 0.75, height: horizontal ? iconSize * 0.75 : 1)
     }
 }
 
@@ -343,7 +354,8 @@ private struct AssignToMenu: View {
     }
 }
 
-/// Invisible, but draggable and removable — a gap the user placed.
+/// Invisible, but draggable and removable — a gap the user placed. A divider is the same gap with
+/// the separator's line drawn in it.
 private struct SpacerTile: View {
     let item: DockItem
     let extent: CGFloat
@@ -359,6 +371,11 @@ private struct SpacerTile: View {
             // still be found, grabbed and dragged.
             .fill(.primary.opacity(isHovered ? 0.12 : 0))
             .frame(width: horizontal ? extent : iconSize, height: horizontal ? iconSize : extent)
+            .overlay {
+                if item.id.hasPrefix(dividerPrefix) {
+                    DividerLine(iconSize: iconSize, horizontal: horizontal)
+                }
+            }
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .contextMenu {

@@ -80,6 +80,17 @@ final class DockModelItemsTests: XCTestCase {
         XCTAssertTrue(list[2].isPinned)
     }
 
+    /// A divider is a spacer that is as wide as the separator, so it gets everything a spacer does.
+    func testDividersArePinnedLikeSpacersAtTheSeparatorsWidth() {
+        let divider = dividerPrefix + "B"
+        let list = items(pinned: [safari, divider, spacer], missing: [divider])
+        XCTAssertEqual(list.map(\.id), [DockModel.finderID, id(safari), divider, spacer, "separator", "trash"])
+        XCTAssertEqual(list[2].kind, .spacer)
+        let metrics = DockMetrics()
+        XCTAssertEqual(list[2].spec(for: metrics), .fixed(metrics.separatorExtent))
+        XCTAssertEqual(list[3].spec(for: metrics), .fixed(metrics.iconSize * 0.55))
+    }
+
     func testStacksAreFoldersOnlyAndEachOnce() {
         let list = items(stacks: ["/a", "/doc.txt", "/a", "/b"], folders: ["/a", "/b"])
         XCTAssertEqual(list.map(\.id), [DockModel.finderID, "separator", "folder:/a", "folder:/b", "trash"])

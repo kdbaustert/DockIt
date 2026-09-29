@@ -5,7 +5,7 @@ struct ApplicationsPane: View {
     @Bindable var settings: DockSettings
 
     var body: some View {
-        // Spacers share `pinnedApps` but are managed from the dock and Widgets ▸ Spacers; listed
+        // Spacers and dividers share `pinnedApps` but are managed from the dock and Widgets ▸ Layout; listed
         // here they would be rows with no icon and a meaningless "spacer:<uuid>" path.
         let apps = settings.pinnedApps.filter { !$0.hasPrefix(spacerPrefix) }
         SettingsPage(title: "Applications", subtitle: "Drag icons in the dock to reorder them, or drop apps onto it.") {

@@ -26,7 +26,7 @@ struct DockItem: Identifiable, Equatable, Sendable {
         case .app, .folder, .trash: .icon(m)
         case .minimizedWindow: .init(resting: m.iconSize * 1.4, magnifies: false)
         case .separator: .fixed(m.separatorExtent)
-        case .spacer: .fixed(m.iconSize * 0.55)
+        case .spacer: id.hasPrefix(dividerPrefix) ? .fixed(m.separatorExtent) : .fixed(m.iconSize * 0.55)
         case .nowPlaying: .fixed(180)
         case .weather: .fixed(128)
         case .clock: .fixed(84)
@@ -38,6 +38,9 @@ struct DockItem: Identifiable, Equatable, Sendable {
 
 /// Spacers persist inside `pinnedApps` so they order and drag like everything else there.
 let spacerPrefix = "spacer:"
+/// A divider is a spacer that draws the separator's line. Its entry keeps the spacer prefix, so it
+/// orders, drags and is removed exactly as a spacer is, by everything that already handles those.
+let dividerPrefix = spacerPrefix + "divider:"
 
 struct MinimizedWindow: Equatable, Sendable {
     let id: CGWindowID
@@ -695,8 +698,8 @@ final class DockModel {
         return Array(([path] + list.filter { key(URL(fileURLWithPath: $0)) != id }).prefix(recentAppsKept))
     }
 
-    func addSpacer() {
-        settings.addSpacer()
+    func addSpacer(divider: Bool = false) {
+        settings.addSpacer(divider: divider)
     }
 
     func emptyTrash() {
