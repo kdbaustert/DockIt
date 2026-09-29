@@ -72,6 +72,10 @@ struct DockView: View {
                         CalendarTile(width: size, height: metrics.iconSize)
                             .onDrag { model.dragPayload(for: item) }
                             .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .runningApps:
+                        // No drag of the tile itself: each icon in it drags its own app.
+                        RunningAppsTile(apps: item.apps, width: size, height: metrics.iconSize, model: model)
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
                     case .app, .folder, .trash:
                         DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
                     }
@@ -294,7 +298,7 @@ private struct DockItemMenu: View {
             }
         case .spacer:
             Button("Remove from Dock") { model.unpin(item) }
-        case .separator, .nowPlaying, .weather, .clock, .battery, .calendar:
+        case .separator, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
             EmptyView()
         }
     }
@@ -627,6 +631,81 @@ struct BatteryTile: View {
             Divider()
             DockMenuFooter()
         }
+    }
+}
+
+/// Running apps that are not pinned, as small icons in one tile. Each icon does what its own tile on
+/// the bar did: a click switches to the app, a drag onto the bar pins it, and its menu is the app's.
+/// Settings' gallery shows it with no model, as a picture.
+struct RunningAppsTile: View {
+    let apps: [DockItem]
+    let width: CGFloat
+    let height: CGFloat
+    var model: DockModel?
+
+    var body: some View {
+        let size = DockItem.runningAppsIconSize(height: height)
+        let gap = DockItem.runningAppsGap
+        // As many as the width holds; past that, the last slot counts the rest.
+        let fits = max(1, Int((width - 2 * DockItem.runningAppsInset + gap) / (size + gap)))
+        let shown = apps.count > fits ? Array(apps.prefix(fits - 1)) : apps
+        let rest = Array(apps.dropFirst(shown.count))
+        HStack(spacing: gap) {
+            ForEach(shown) { app in
+                icon(app, size: size)
+            }
+            if !rest.isEmpty {
+                Menu {
+                    ForEach(rest) { app in
+                        Button(app.name) { model?.open(app) }
+                    }
+                } label: {
+                    Text("+\(rest.count)")
+                        .font(.system(size: size * 0.38, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: size, height: size)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("\(rest.count) more running apps")
+            }
+        }
+        .widgetTile(width: width, height: height)
+        .contextMenu {
+            // The same setting as Settings ▸ Widgets ▸ Running Apps.
+            Button("Remove from Dock") { DockSettings.shared.showsRunningApps = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+
+    private func icon(_ app: DockItem, size: CGFloat) -> some View {
+        Image(nsImage: model?.icon(for: app) ?? Self.icon(for: app))
+            .resizable()
+            .frame(width: size, height: size)
+            .contentShape(Rectangle())
+            .onTapGesture { model?.open(app) }
+            .onDrag { model?.dragPayload(for: app) ?? NSItemProvider() }
+            .contextMenu {
+                if let model {
+                    DockItemMenu(item: app, model: model)
+                    Divider()
+                    DockMenuFooter()
+                }
+            }
+            .help(app.name)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(app.name)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model?.open(app) }
+    }
+
+    /// The gallery's icons, which have no model to cache them.
+    private static func icon(for app: DockItem) -> NSImage {
+        app.url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            ?? app.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.icon } ?? NSImage()
     }
 }
 

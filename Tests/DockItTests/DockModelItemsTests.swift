@@ -91,6 +91,26 @@ final class DockModelItemsTests: XCTestCase {
         XCTAssertEqual(list[3].spec(for: metrics), .fixed(metrics.iconSize * 0.55))
     }
 
+    /// Unpinned running apps leave the bar for the tile; a pinned one that is running stays put.
+    func testRunningAppsWidgetGathersOnlyUnpinnedApps() {
+        let list = items(
+            pinned: [safari], running: [running(safari, pid: 1), running(mail, pid: 2), running(notes, pid: 3)],
+            enabledWidgets: ["runningApps"])
+        XCTAssertEqual(list.map(\.id), [DockModel.finderID, id(safari), "separator", "trash", "widget:runningApps"])
+        XCTAssertEqual(list.last?.apps.map(\.id), [id(mail), id(notes)])
+    }
+
+    func testRunningAppsWidgetIsAbsentWithNothingToGather() {
+        let list = items(pinned: [safari], running: [running(safari, pid: 1)], enabledWidgets: ["runningApps"])
+        XCTAssertFalse(list.contains { $0.kind == .runningApps })
+    }
+
+    /// A side dock shows no widgets, so gathering there would make the apps vanish.
+    func testRunningAppsStayOnASideDock() {
+        let list = items(running: [running(mail, pid: 2)], enabledWidgets: ["runningApps"], edge: .left)
+        XCTAssertEqual(list.map(\.id), [DockModel.finderID, id(mail), "separator", "trash"])
+    }
+
     func testStacksAreFoldersOnlyAndEachOnce() {
         let list = items(stacks: ["/a", "/doc.txt", "/a", "/b"], folders: ["/a", "/b"])
         XCTAssertEqual(list.map(\.id), [DockModel.finderID, "separator", "folder:/a", "folder:/b", "trash"])

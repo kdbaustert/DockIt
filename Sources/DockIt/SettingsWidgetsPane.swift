@@ -50,8 +50,10 @@ private struct WidgetGallery: View {
     private static let tileHeight: CGFloat = 48
     private static let cards: [(name: String, title: String, width: CGFloat)] = [
         ("nowPlaying", "Now Playing", 150), ("weather", "Weather", 128), ("clock", "Clock", 84),
-        ("calendar", "Calendar", 150), ("battery", "Battery", 84),
+        ("calendar", "Calendar", 150), ("battery", "Battery", 84), ("runningApps", "Running Apps", 150),
     ]
+    /// What the running-apps card shows: the apps its tile would hold, read as the gallery opens.
+    @State private var runningApps: [DockItem] = []
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 14) {
@@ -61,8 +63,28 @@ private struct WidgetGallery: View {
             }
         }
         .padding(SettingsChrome.rowInset)
-        .onAppear { widgets.isPreviewing = true }
+        .onAppear {
+            widgets.isPreviewing = true
+            runningApps = Self.collectableApps(settings)
+        }
         .onDisappear { widgets.isPreviewing = false }
+    }
+
+    /// The running apps the tile would gather, by the bar's own rule: running, regular, not DockIt
+    /// (or its osascript children), and not already pinned or hidden.
+    private static func collectableApps(_ settings: DockSettings) -> [DockItem] {
+        let me = ProcessInfo.processInfo.processIdentifier
+        let running = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && $0.processIdentifier != me
+                && $0.bundleIdentifier != Bundle.main.bundleIdentifier
+        }
+        let items = DockModel.items(
+            pinned: settings.pinnedApps, hidden: settings.hiddenApps, stacks: [],
+            running: running.map(DockModel.RunningApp.init), recent: [], minimized: [],
+            widgetOrder: ["runningApps"], enabledWidgets: ["runningApps"], edge: .bottom,
+            fileExists: { FileManager.default.fileExists(atPath: $0) }, isFolder: { _ in false },
+            displayName: { FileManager.default.displayName(atPath: $0) })
+        return items.first { $0.kind == .runningApps }?.apps ?? []
     }
 
     private func card(_ name: String, title: String, width: CGFloat) -> some View {
@@ -89,6 +111,7 @@ private struct WidgetGallery: View {
             case "clock": ClockTile(width: width, height: Self.tileHeight)
             case "calendar": CalendarTile(width: width, height: Self.tileHeight)
             case "battery": BatteryTile(width: width, height: Self.tileHeight)
+            case "runningApps": RunningAppsTile(apps: runningApps, width: width, height: Self.tileHeight)
             default: EmptyView()
             }
         }

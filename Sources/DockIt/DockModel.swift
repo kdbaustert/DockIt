@@ -4,7 +4,8 @@ import SwiftUI
 
 struct DockItem: Identifiable, Equatable, Sendable {
     enum Kind: Sendable {
-        case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock, battery, calendar
+        case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock, battery, calendar,
+             runningApps
     }
 
     let id: String
@@ -18,6 +19,9 @@ struct DockItem: Identifiable, Equatable, Sendable {
     var windowID: CGWindowID?
     /// And the app that window belongs to, for VoiceOver — looked up once per rebuild, not per render.
     var appName: String?
+    /// The apps a `.runningApps` tile collected: carried on the item, so a change to them is a change
+    /// to the bar's items and rebuilds it like any other.
+    var apps: [DockItem] = []
 
     /// How much of the bar the item takes. The widget widths are fixed points: their content is
     /// text, which does not scale with the icons.
@@ -32,7 +36,23 @@ struct DockItem: Identifiable, Equatable, Sendable {
         case .clock: .fixed(84)
         case .battery: .fixed(84)
         case .calendar: .fixed(156)
+        case .runningApps: .fixed(Self.runningAppsWidth(count: apps.count, height: m.iconSize))
         }
+    }
+
+    // The running-apps tile's geometry, which both its width here and its drawing in DockView read.
+
+    /// Icons shown before the last slot becomes a "+N" for the rest.
+    static let runningAppsShown = 8
+    static let runningAppsGap: CGFloat = 3
+    static let runningAppsInset: CGFloat = 7
+
+    static func runningAppsIconSize(height: CGFloat) -> CGFloat { (height * 0.62).rounded() }
+
+    /// Wide enough for `count` icons, up to `runningAppsShown` slots.
+    static func runningAppsWidth(count: Int, height: CGFloat) -> CGFloat {
+        let slots = CGFloat(min(max(count, 1), runningAppsShown))
+        return 2 * runningAppsInset + slots * runningAppsIconSize(height: height) + (slots - 1) * runningAppsGap
     }
 }
 
@@ -218,7 +238,8 @@ final class DockModel {
         observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps,
                  settings.showsMinimizedWindows, settings.showsNowPlaying, settings.showsWeather,
-                 settings.showsClock, settings.showsBattery, settings.showsCalendar, settings.widgetOrder,
+                 settings.showsClock, settings.showsBattery, settings.showsCalendar, settings.showsRunningApps,
+                 settings.widgetOrder,
                  settings.edge, settings.showsRecentApps)
         } onChange: { [weak self] in
             self?.rebuild()
@@ -316,6 +337,7 @@ final class DockModel {
         if settings.showsClock { enabledWidgets.insert("clock") }
         if settings.showsBattery, WidgetsModel.hasBattery { enabledWidgets.insert("battery") }
         if settings.showsCalendar { enabledWidgets.insert("calendar") }
+        if settings.showsRunningApps { enabledWidgets.insert("runningApps") }
         let result = Self.items(
             pinned: settings.pinnedApps, hidden: settings.hiddenApps, stacks: settings.stacks,
             running: running.map(RunningApp.init), recent: settings.showsRecentApps ? settings.recentApps : [],
@@ -336,7 +358,7 @@ final class DockModel {
         if result != items { items = result }
         // Only what is on the bar: apps come and go all day, and an app with no bundle gets a new
         // "pid:" key at every launch, so the cache otherwise only ever grew.
-        let onBar = Set(result.map(\.id))
+        let onBar = Set(result.flatMap { [$0.id] + $0.apps.map(\.id) })
         icons = icons.filter { onBar.contains($0.key) }
     }
 
@@ -352,7 +374,8 @@ final class DockModel {
 
     /// The bar's items in order: Finder, the pinned apps and spacers, the running apps not already
     /// there, the recent apps behind a separator of their own, the separator, the stacks, the
-    /// minimized windows, the Trash, then the widgets. The disk is reached only through the three
+    /// minimized windows, the Trash, then the widgets. With the running-apps widget on a bottom
+    /// dock, those running apps are gathered into its tile instead of standing on the bar. The disk is reached only through the three
     /// closures (and `key`'s symlink resolution), for the tests.
     nonisolated static func items(
         pinned: [String], hidden: [String], stacks: [String], running: [RunningApp], recent: [String],
@@ -383,14 +406,22 @@ final class DockModel {
                 isPinned: true, isRunning: app != nil, pid: app?.pid
             ))
         }
+        // Bottom only, as the widgets are: on a side dock the tile never shows, and the apps with it.
+        let collects = edge == .bottom && enabledWidgets.contains("runningApps")
+        var collected: [DockItem] = []
         for app in running {
             let id = app.id
             guard !seen.contains(id) else { continue }
             seen.insert(id)
-            result.append(DockItem(
+            let item = DockItem(
                 id: id, kind: .app, url: app.bundleURL, name: app.name,
                 isPinned: false, isRunning: true, pid: app.pid
-            ))
+            )
+            if collects {
+                collected.append(item)
+            } else {
+                result.append(item)
+            }
         }
         // Only apps with no tile already — pinned, running, hidden and Finder are all in `seen` by now.
         var recents: [DockItem] = []
@@ -438,10 +469,15 @@ final class DockModel {
             case "clock": kind = .clock
             case "battery": kind = .battery
             case "calendar": kind = .calendar
+            case "runningApps": kind = .runningApps
             default: continue
             }
             guard enabledWidgets.contains(name) else { continue }
-            result.append(DockItem(id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil))
+            // An empty tile would be a gap that says nothing; it comes back with the first app.
+            if kind == .runningApps, collected.isEmpty { continue }
+            result.append(DockItem(
+                id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil,
+                apps: kind == .runningApps ? collected : []))
         }
         return result
     }
@@ -503,7 +539,7 @@ final class DockModel {
             if let windowID = item.windowID, let pid = item.pid {
                 WindowActions.raise(windowID, pid: pid)
             }
-        case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar:
+        case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
             break
         }
     }
@@ -664,7 +700,7 @@ final class DockModel {
             settings.stacks.removeAll { "folder:" + $0 == item.id }
         case .spacer:
             settings.pinnedApps.removeAll { $0 == item.id }
-        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock, .battery, .calendar:
+        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
             return
         }
     }
@@ -685,7 +721,9 @@ final class DockModel {
     private func recordQuit(_ url: URL) {
         guard settings.showsRecentApps else { return }
         let id = Self.key(url)
-        guard id != Self.finderID, items.contains(where: { $0.id == id && $0.kind == .app && $0.isRunning })
+        // The running-apps tile's apps had tiles too, just gathered into one.
+        let tiles = items.flatMap { $0.kind == .runningApps ? $0.apps : [$0] }
+        guard id != Self.finderID, tiles.contains(where: { $0.id == id && $0.kind == .app && $0.isRunning })
         else { return }
         let updated = Self.recordingRecent(url.path, in: settings.recentApps)
         if updated != settings.recentApps { settings.recentApps = updated }

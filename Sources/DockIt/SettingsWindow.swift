@@ -129,6 +129,8 @@ private enum SettingsIndex {
              ["calendar", "event", "meeting", "next", "agenda", "widget"]),
         item("batteryWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Battery",
              ["battery", "charge", "charging", "power", "percent", "widget"]),
+        item("runningAppsWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Running apps",
+             ["running", "apps", "open", "unpinned", "collect", "group", "widget"]),
         item("spacers", .widgets, SettingsAnchor.spacers, "Layout", "Add or remove spacers and dividers",
              ["spacer", "space", "gap", "spacing", "divider", "separator", "line", "remove", "add"]),
         item("theme", .appearance, SettingsAnchor.theme, "Theme", "Bar tint",

@@ -73,16 +73,16 @@ final class DockLayoutTests: XCTestCase {
 
     func testWidgetOrderDropsDuplicatesKeepingFirst() {
         XCTAssertEqual(normalizedWidgetOrder(["clock", "weather", "clock", "nowPlaying", "weather"]),
-                       ["clock", "weather", "nowPlaying", "calendar", "battery"])
+                       ["clock", "weather", "nowPlaying", "calendar", "battery", "runningApps"])
     }
 
     // An order saved before a widget existed must still show that widget when it is turned on.
     func testWidgetOrderAppendsMissingInDefaultOrder() {
-        XCTAssertEqual(normalizedWidgetOrder(["weather"]), ["weather", "nowPlaying", "clock", "calendar", "battery"])
+        XCTAssertEqual(normalizedWidgetOrder(["weather"]), ["weather", "nowPlaying", "clock", "calendar", "battery", "runningApps"])
         XCTAssertEqual(normalizedWidgetOrder([]), canonicalWidgetOrder)
-        // Saved before the calendar and battery existed: kept as dragged, the new two after it.
+        // Saved before the calendar, battery and running apps existed: kept as dragged, the new ones after.
         XCTAssertEqual(normalizedWidgetOrder(["clock", "nowPlaying", "weather"]),
-                       ["clock", "nowPlaying", "weather", "calendar", "battery"])
+                       ["clock", "nowPlaying", "weather", "calendar", "battery", "runningApps"])
     }
 
     /// Appending is what keeps an upgraded order and a fresh install's default the same.
@@ -92,7 +92,7 @@ final class DockLayoutTests: XCTestCase {
 
     func testWidgetOrderDropsUnknownNames() {
         XCTAssertEqual(normalizedWidgetOrder(["stocks", "clock", "", "nowPlaying"]),
-                       ["clock", "nowPlaying", "weather", "calendar", "battery"])
+                       ["clock", "nowPlaying", "weather", "calendar", "battery", "runningApps"])
     }
 
     func testIndexOutsideRowIsNil() {

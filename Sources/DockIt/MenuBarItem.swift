@@ -62,10 +62,16 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     /// on the bar does. Running apps carry the dock's dot, and a badge follows the name.
     private func addDockItems(to menu: NSMenu) {
         var previous: DockItem.Kind?
-        for dockItem in model.items {
+        // The running-apps tile's apps go back where the bar would have had them, just before the
+        // first separator, so the menu reads the same with the widget on or off.
+        var entries = model.items.filter { $0.kind != .runningApps }
+        if let collected = model.items.first(where: { $0.kind == .runningApps })?.apps {
+            entries.insert(contentsOf: collected, at: entries.firstIndex { $0.kind == .separator } ?? entries.count)
+        }
+        for dockItem in entries {
             let isEntry = switch dockItem.kind {
             case .app, .folder, .minimizedWindow, .trash: true
-            case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar: false
+            case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps: false
             }
             guard isEntry else { continue }
             // A rule where the bar has its separator: apps above, everything else below.

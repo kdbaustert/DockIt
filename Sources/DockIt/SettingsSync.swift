@@ -38,6 +38,7 @@ struct PortableSettings: Codable, Equatable {
     var showsClock: Bool?
     var showsBattery: Bool?
     var showsCalendar: Bool?
+    var showsRunningApps: Bool?
     var widgetOrder: [String]?
     var weatherLocation: String?
     var weatherLatitude: Double?
@@ -114,7 +115,8 @@ extension DockSettings {
             previewShowsControls: previewShowsControls,
             livePreviews: livePreviews, showsMinimizedWindows: showsMinimizedWindows,
             showsNowPlaying: showsNowPlaying, showsWeather: showsWeather, showsClock: showsClock,
-            showsBattery: showsBattery, showsCalendar: showsCalendar, widgetOrder: widgetOrder, weatherLocation: weatherLocation,
+            showsBattery: showsBattery, showsCalendar: showsCalendar, showsRunningApps: showsRunningApps,
+            widgetOrder: widgetOrder, weatherLocation: weatherLocation,
             weatherLatitude: weatherLatitude, weatherLongitude: weatherLongitude,
             weatherFahrenheit: weatherFahrenheit,
             clock24Hour: clock24Hour, barTint: barTint, barTintIntensity: barTintIntensity,
@@ -163,6 +165,7 @@ extension DockSettings {
         if let v = p.showsClock, v != showsClock { showsClock = v }
         if let v = p.showsBattery, v != showsBattery { showsBattery = v }
         if let v = p.showsCalendar, v != showsCalendar { showsCalendar = v }
+        if let v = p.showsRunningApps, v != showsRunningApps { showsRunningApps = v }
         if let v = p.widgetOrder, v != widgetOrder { widgetOrder = v }
         if let v = p.weatherLocation, v != weatherLocation { weatherLocation = v }
         if let v = p.weatherLatitude, v != weatherLatitude { weatherLatitude = v }
