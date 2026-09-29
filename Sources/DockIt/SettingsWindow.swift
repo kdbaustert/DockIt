@@ -68,6 +68,7 @@ enum SettingsAnchor {
     static let permissions = "general.permissions"
     static let updates = "general.updates"
     static let widgets = "widgets.widgets"
+    static let widgetOptions = "widgets.options"
     static let spacers = "widgets.spacers"
     static let theme = "appearance.theme"
     static let windows = "interactions.windows"
@@ -120,7 +121,7 @@ private enum SettingsIndex {
              ["music", "spotify", "track", "widget", "now playing"]),
         item("weatherWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Weather",
              ["weather", "temperature", "forecast", "widget"]),
-        item("weatherLocation", .widgets, SettingsAnchor.widgets, "Widgets", "Weather location",
+        item("weatherLocation", .widgets, SettingsAnchor.widgetOptions, "Options", "Weather location",
              ["city", "state", "town", "place", "location", "search"]),
         item("clockWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Clock",
              ["clock", "time", "date", "widget", "24"]),

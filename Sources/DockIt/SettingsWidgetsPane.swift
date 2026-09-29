@@ -7,32 +7,19 @@ struct WidgetsPane: View {
         SettingsPage(title: "Widgets", subtitle: "Add widgets and spacers to the dock, or take them off.") {
             SettingsSection(
                 title: "Widgets", anchor: SettingsAnchor.widgets,
-                footer: "Widgets sit at the end of the bar, beside the Trash. Right-click one in the dock to remove it. Widgets show when the dock is at the bottom."
+                footer: "Drag a widget into your dock, or click to add it; click again to take it off. Widgets sit at the end of the bar, beside the Trash, and show when the dock is at the bottom. Now playing asks macOS once for permission to control each player, and the calendar asks for access to your calendars."
             ) {
-                SettingsToggle(
-                    title: "Now playing",
-                    subtitle: "The current Spotify or Music track, with artwork. Click to play or pause. macOS asks permission to control each player once.",
-                    isOn: $settings.showsNowPlaying)
-                SettingsToggle(title: "Weather", isOn: $settings.showsWeather)
+                WidgetGallery(settings: settings)
+            }
+            SettingsSection(title: "Options", anchor: SettingsAnchor.widgetOptions) {
                 WeatherLocationRow(settings: settings)
                     .disabled(!settings.showsWeather)
                 SettingsToggle(title: "Fahrenheit", isOn: $settings.weatherFahrenheit)
                     .disabled(!settings.showsWeather)
-                SettingsToggle(title: "Clock", isOn: $settings.showsClock)
                 // The calendar's times follow it too, so the two tiles never disagree.
                 SettingsToggle(title: "24-hour time", isOn: $settings.clock24Hour)
                     .disabled(!settings.showsClock && !settings.showsCalendar)
-                SettingsToggle(
-                    title: "Calendar",
-                    subtitle: "Your next event today. macOS asks once for access to your calendars when you turn this on.",
-                    isOn: calendarBinding)
                 CalendarAccessRow(settings: settings)
-                // Not offered at all without a battery: the tile could never show.
-                if WidgetsModel.hasBattery {
-                    SettingsToggle(
-                        title: "Battery", subtitle: "Charge level, and whether it is charging.",
-                        isOn: $settings.showsBattery)
-                }
             }
             SettingsSection(
                 title: "Spacers", anchor: SettingsAnchor.spacers,
@@ -51,16 +38,91 @@ struct WidgetsPane: View {
             }
         }
     }
+}
 
-    /// Turning the widget on here is the one place it asks for calendar access — a switch the user
-    /// just flipped, rather than a prompt at launch or when sync turns it on from another Mac.
-    private var calendarBinding: Binding<Bool> {
-        Binding(
-            get: { settings.showsCalendar },
-            set: { on in
-                settings.showsCalendar = on
-                if on { WidgetsModel.shared.requestCalendarAccess() }
-            })
+/// Every widget drawn by the tile the bar itself uses, so what is picked is what lands. A card drags
+/// the payload a tile on the bar drags — the bar's drop handling places it where it lands — or a
+/// click switches it on and off in place.
+private struct WidgetGallery: View {
+    @Bindable var settings: DockSettings
+    private let widgets = WidgetsModel.shared
+
+    /// The tiles' height on the bar at the default icon size; the widths are the bar's, with now
+    /// playing and the calendar narrowed to fit a card.
+    private static let tileHeight: CGFloat = 48
+    private static let cards: [(name: String, title: String, width: CGFloat)] = [
+        ("nowPlaying", "Now Playing", 150), ("weather", "Weather", 128), ("clock", "Clock", 84),
+        ("calendar", "Calendar", 150), ("battery", "Battery", 84),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 14) {
+            // Not offered at all without a battery: the tile could never show.
+            ForEach(Self.cards.filter { $0.name != "battery" || WidgetsModel.hasBattery }, id: \.name) {
+                card($0.name, title: $0.title, width: $0.width)
+            }
+        }
+        .padding(SettingsChrome.rowInset)
+        .onAppear { widgets.isPreviewing = true }
+        .onDisappear { widgets.isPreviewing = false }
+    }
+
+    private func card(_ name: String, title: String, width: CGFloat) -> some View {
+        let isOn = DockSettings.widgetSwitches[name].map { settings[keyPath: $0] } ?? false
+        return VStack(spacing: 8) {
+            tile(name, width: width)
+                .frame(maxWidth: .infinity, minHeight: 80)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(SettingsChrome.cardFill))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(
+                            isOn ? Color.accentColor : SettingsChrome.cardBorder,
+                            lineWidth: isOn ? 1.5 : SettingsChrome.hairline))
+                .overlay(alignment: .topTrailing) {
+                    if isOn {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.accentColor)
+                            .padding(6)
+                    }
+                }
+            Text(title).font(.system(size: 12, weight: .medium))
+        }
+        .contentShape(Rectangle())
+        // A tap gesture rather than a Button: a button takes the mouse-down, and the drag never starts.
+        .onTapGesture { toggle(name, isOn: isOn) }
+        // The drag image is the tile alone, as it will look on the bar — not the card around it.
+        .onDrag { DockModel.dragPayload(forWidget: name) } preview: { tile(name, width: width) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "In the dock" : "Not in the dock")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { toggle(name, isOn: isOn) }
+    }
+
+    /// The bar's own tile, inert: its clicks and menu belong to the bar, not to a preview.
+    @ViewBuilder
+    private func tile(_ name: String, width: CGFloat) -> some View {
+        Group {
+            switch name {
+            case "nowPlaying": NowPlayingTile(width: width, height: Self.tileHeight)
+            case "weather": WeatherTile(width: width, height: Self.tileHeight)
+            case "clock": ClockTile(width: width, height: Self.tileHeight)
+            case "calendar": CalendarTile(width: width, height: Self.tileHeight)
+            case "battery": BatteryTile(width: width, height: Self.tileHeight)
+            default: EmptyView()
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func toggle(_ name: String, isOn: Bool) {
+        guard let key = DockSettings.widgetSwitches[name] else { return }
+        if isOn {
+            settings[keyPath: key] = false
+        } else {
+            widgets.add(name)
+        }
     }
 }
 

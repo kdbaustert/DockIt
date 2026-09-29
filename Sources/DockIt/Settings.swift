@@ -119,6 +119,11 @@ final class DockSettings {
     var showsCalendar: Bool { didSet { store.set(showsCalendar, forKey: "showsCalendar") } }
     /// The widgets' left-to-right order; only the enabled ones show.
     var widgetOrder: [String] { didSet { store.set(widgetOrder, forKey: "widgetOrder") } }
+    /// Each widget's switch, by its name in `widgetOrder`.
+    static let widgetSwitches: [String: ReferenceWritableKeyPath<DockSettings, Bool>] = [
+        "nowPlaying": \.showsNowPlaying, "weather": \.showsWeather, "clock": \.showsClock,
+        "calendar": \.showsCalendar, "battery": \.showsBattery,
+    ]
     /// Coordinates picked from a city search; 0,0 (an empty patch of the Gulf of Guinea) means
     /// "unset — geocode the typed name instead".
     var weatherLatitude: Double { didSet { store.set(weatherLatitude, forKey: "weatherLatitude") } }

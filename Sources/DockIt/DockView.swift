@@ -425,7 +425,7 @@ private struct MinimizedTile: View {
     }
 }
 
-private struct NowPlayingTile: View {
+struct NowPlayingTile: View {
     let width: CGFloat
     let height: CGFloat
     private let widgets = WidgetsModel.shared
@@ -514,7 +514,7 @@ private struct NowPlayingTile: View {
     }
 }
 
-private struct WeatherTile: View {
+struct WeatherTile: View {
     let width: CGFloat
     let height: CGFloat
     private let widgets = WidgetsModel.shared
@@ -555,7 +555,7 @@ private struct WeatherTile: View {
     }
 }
 
-private struct ClockTile: View {
+struct ClockTile: View {
     let width: CGFloat
     let height: CGFloat
     private let widgets = WidgetsModel.shared
@@ -579,7 +579,7 @@ private struct ClockTile: View {
     }
 }
 
-private struct BatteryTile: View {
+struct BatteryTile: View {
     let width: CGFloat
     let height: CGFloat
     private let widgets = WidgetsModel.shared
@@ -615,7 +615,7 @@ private struct BatteryTile: View {
 
 /// The next event today. Until access is granted it stands in for the permission instead: a click
 /// asks for it, or once refused, opens the pane in System Settings where it is given back.
-private struct CalendarTile: View {
+struct CalendarTile: View {
     let width: CGFloat
     let height: CGFloat
     private let widgets = WidgetsModel.shared

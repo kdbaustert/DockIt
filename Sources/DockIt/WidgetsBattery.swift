@@ -56,7 +56,7 @@ extension WidgetsModel {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), batterySource, .commonModes)
             self.batterySource = nil
         }
-        guard settings.showsBattery, Self.hasBattery else {
+        guard settings.showsBattery || isPreviewing, Self.hasBattery else {
             battery = nil
             return
         }

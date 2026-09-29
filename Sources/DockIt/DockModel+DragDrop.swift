@@ -26,6 +26,8 @@ extension DockModel {
         let targetName = target.flatMap { item -> String? in
             item.id.hasPrefix(Self.widgetIDPrefix) ? String(item.id.dropFirst(Self.widgetIDPrefix.count)) : nil
         }
+        // Before the name check: a gallery widget dropped on itself is still a widget to add.
+        WidgetsModel.shared.add(name)
         guard name != targetName else { return }
         settings.widgetOrder = Self.reordered(settings.widgetOrder, moving: name, before: targetName)
     }
@@ -69,20 +71,30 @@ extension DockModel {
     func dragPayload(for item: DockItem) -> NSItemProvider {
         // Spacers and widgets drag by their identity strings, exactly as an app drags by its path.
         if item.kind == .spacer || item.id.hasPrefix(Self.widgetIDPrefix) {
-            let provider = NSItemProvider()
-            let payload = Data(item.id.utf8)
-            provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .ownProcess) {
-                completion in
-                completion(payload, nil)
-                return nil
-            }
-            return provider
+            return Self.ownProcessPayload(item.id)
         }
         guard item.kind == .app, item.id != Self.finderID, let url = item.url else { return NSItemProvider() }
         let provider = NSItemProvider()
         let data = Data(url.path.utf8)
         provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .all) { completion in
             completion(data, nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// A widget dragged out of Settings' gallery: the payload a tile on the bar drags, so the bar's
+    /// drop handling places it wherever it lands.
+    static func dragPayload(forWidget name: String) -> NSItemProvider {
+        ownProcessPayload(widgetIDPrefix + name)
+    }
+
+    private static func ownProcessPayload(_ id: String) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let payload = Data(id.utf8)
+        provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .ownProcess) {
+            completion in
+            completion(payload, nil)
             return nil
         }
         return provider

@@ -47,6 +47,11 @@ final class WidgetsModel {
     var calendarTitle: String?
     var calendarTime = ""
 
+    /// Set while Settings' gallery shows the tiles, so the clock and battery previews read true with
+    /// the widget off. Only those two: they cost a minute timer and a power notice, where weather
+    /// would fetch, and now playing and the calendar would ask macOS for permission.
+    var isPreviewing = false
+
     @ObservationIgnored let settings: DockSettings
     @ObservationIgnored var clockTimer: Timer?
     /// Built when the clock is configured rather than per tick: two formatters a minute, forever,
@@ -88,8 +93,8 @@ final class WidgetsModel {
         self.settings = settings
         // One observation per source, each reading only its own settings: typing a weather location
         // must not re-poll the players or rebuild the clock's timer.
-        observeContinuously(ownedBy: self) { [settings] in
-            _ = (settings.showsClock, settings.clock24Hour)
+        observeContinuously(ownedBy: self) { [unowned self] in
+            _ = (settings.showsClock, settings.clock24Hour, isPreviewing)
         } onChange: { [weak self] in
             self?.configureClock()
         }
@@ -104,8 +109,8 @@ final class WidgetsModel {
         } onChange: { [weak self] in
             self?.configurePlayer()
         }
-        observeContinuously(ownedBy: self) { [settings] in
-            _ = settings.showsBattery
+        observeContinuously(ownedBy: self) { [unowned self] in
+            _ = (settings.showsBattery, isPreviewing)
         } onChange: { [weak self] in
             self?.configureBattery()
         }
@@ -142,5 +147,13 @@ final class WidgetsModel {
         configurePlayer()
         configureBattery()
         configureCalendar()
+    }
+
+    /// Puts the named widget on the bar, from a click or a drop — a drop of one already there only
+    /// reorders it. The calendar asks for access here because this is always a click or a drag.
+    func add(_ name: String) {
+        guard let isOn = DockSettings.widgetSwitches[name], !settings[keyPath: isOn] else { return }
+        settings[keyPath: isOn] = true
+        if name == "calendar" { requestCalendarAccess() }
     }
 }
