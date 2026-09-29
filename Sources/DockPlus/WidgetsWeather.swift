@@ -38,10 +38,19 @@ extension WidgetsModel {
         weatherTask = Task { [weak self] in
             // Not `??`: its right side is an autoclosure, which cannot await.
             let located: Located?
+            var mayRetry = true
             if let pinned {
                 located = pinned
             } else {
-                located = await Self.geocode(place)
+                switch await Self.geocode(place) {
+                case .located(let found): located = found
+                case .failed: located = nil
+                case .noMatch:
+                    // A definitive answer, which a minute would not change; the quarter-hour cycle
+                    // still re-asks, so a geocoder hiccup misread as no match rights itself.
+                    located = nil
+                    mayRetry = false
+                }
             }
             var current: Current?
             if let located {
@@ -50,7 +59,7 @@ extension WidgetsModel {
             }
             // A cancelled fetch was superseded or switched off; it neither shows nor retries.
             guard let self, !Task.isCancelled else { return }
-            guard let located, let current else { return weatherFailed(for: place) }
+            guard let located, let current else { return weatherFailed(for: place, mayRetry: mayRetry) }
             weatherReadingLocation = place
             weatherPlace = Self.abbreviatingState(located.name)
             weatherTemperature = "\(Int(current.temperature.rounded()))°"
@@ -61,8 +70,9 @@ extension WidgetsModel {
 
     /// A reading for another location is wrong, not stale, so it goes; "--°" is honest. Then one
     /// retry a minute on: a transient failure at launch otherwise leaves "--°" a whole cycle. It
-    /// fires only if nothing has changed or succeeded since.
-    private func weatherFailed(for place: String) {
+    /// fires only if nothing has changed or succeeded since. Not for a place the geocoder knows no
+    /// match for (`mayRetry: false`) — retrying a typo every minute hammered the geocoder forever.
+    private func weatherFailed(for place: String, mayRetry: Bool) {
         if weatherReadingLocation != place {
             weatherReadingLocation = nil
             weatherTemperature = nil
@@ -70,6 +80,10 @@ extension WidgetsModel {
             weatherHighLow = ""
         }
         weatherRetry?.cancel()
+        guard mayRetry else {
+            weatherRetry = nil
+            return
+        }
         weatherRetry = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
             guard let self, settings.showsWeather, settings.weatherLocation == place, weatherTemperature == nil
@@ -116,27 +130,33 @@ extension WidgetsModel {
 
     /// The geocoder's best matches for a partial name — what the Settings search list shows.
     nonisolated static func searchCities(_ query: String) async -> [City] {
-        await geocoderResults(query, count: 6).compactMap { City(hit: $0) }
+        (await geocoderResults(query, count: 6) ?? []).compactMap { City(hit: $0) }
     }
 
     private struct Current: Sendable { let temperature: Double; let high: Double; let low: Double; let code: Int }
 
-    private nonisolated static func geocode(_ place: String) async -> Located? {
-        guard let city = await geocoderResults(place, count: 1).first.flatMap({ City(hit: $0, fallbackName: place) })
-        else { return nil }
-        return Located(name: city.placeName, latitude: city.latitude, longitude: city.longitude)
+    /// `noMatch` and `failed` apart, because they retry differently: a name the geocoder does not
+    /// know stays unknown a minute later, while a request that never got through may well get through.
+    private enum Geocoded { case located(Located), noMatch, failed }
+
+    private nonisolated static func geocode(_ place: String) async -> Geocoded {
+        guard let hits = await geocoderResults(place, count: 1) else { return .failed }
+        guard let city = hits.first.flatMap({ City(hit: $0, fallbackName: place) }) else { return .noMatch }
+        return .located(Located(name: city.placeName, latitude: city.latitude, longitude: city.longitude))
     }
 
-    /// The raw hits for a name, empty on any failure — the request both the search list and the
-    /// typed-name geocode make, differing only in how many they want.
-    private nonisolated static func geocoderResults(_ name: String, count: Int) async -> [[String: Any]] {
+    /// The raw hits for a name — the request both the search list and the typed-name geocode make,
+    /// differing only in how many they want. nil when the request or its parse failed; [] when the
+    /// geocoder answered and knows no such place (it omits "results" then, and reports its own
+    /// errors under "error").
+    private nonisolated static func geocoderResults(_ name: String, count: Int) async -> [[String: Any]]? {
         var parts = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
         parts.queryItems = [.init(name: "name", value: name), .init(name: "count", value: String(count))]
         guard let (data, _) = try? await URLSession.shared.data(from: parts.url!),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let results = json["results"] as? [[String: Any]]
-        else { return [] }
-        return results
+              json["error"] as? Bool != true
+        else { return nil }
+        return json["results"] as? [[String: Any]] ?? []
     }
 
     private nonisolated static func forecast(latitude: Double, longitude: Double, fahrenheit: Bool) async -> Current? {

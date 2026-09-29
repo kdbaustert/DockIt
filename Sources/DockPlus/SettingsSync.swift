@@ -425,7 +425,18 @@ final class SettingsSync {
         }
         let modified = Self.modified(url)
         if let modified, modified == lastModified { return .unchanged }
-        guard let data = try? Data(contentsOf: url), let remote = try? PortableSettings.decoded(from: data) else {
+        guard let data = try? Data(contentsOf: url) else { return .pending }
+        guard let remote = try? PortableSettings.decoded(from: data) else {
+            // Corrupt, not merely not here yet: answering .pending forever meant mayWrite never
+            // came true and sync was silently dead on this Mac. The bytes are unrecoverable —
+            // every schema decodes from any JSON object — so this Mac's settings replace them
+            // (last writer wins, as ever). Not remembered as read: until the write lands, each
+            // poll retries the replacement.
+            NSLog("DockPlus: the iCloud settings file does not parse; replacing it")
+            lastError = "The settings file in iCloud was unreadable and is being replaced."
+            agreed = nil
+            mayWrite = true
+            scheduleWrite()
             return .pending
         }
         lastModified = modified

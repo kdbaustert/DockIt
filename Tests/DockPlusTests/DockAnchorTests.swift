@@ -31,6 +31,15 @@ final class DockAnchorTests: XCTestCase {
         XCTAssertEqual(nearRight.frame(for: size, within: screen).maxX, 992)
     }
 
+    /// A panel bigger than the screen keeps its left and bottom edges on it, overflowing the far
+    /// side — the clamp used to resolve the conflict the other way and slide it off to the left.
+    func testOversizedPanelKeepsItsNearEdgesOnScreen() {
+        let dock = NSRect(x: 0, y: 0, width: 1000, height: 120)
+        let anchor = DockAnchor(center: 500, dockFrame: dock, edge: .bottom, barReach: 60)
+        let oversized = NSSize(width: 1200, height: 100)
+        XCTAssertEqual(anchor.frame(for: oversized, within: screen).minX, 8)
+    }
+
     /// With no screen to clamp to, the panel goes exactly where the anchor puts it.
     func testUnclampedWithoutAScreen() {
         let dock = NSRect(x: 0, y: 0, width: 1000, height: 120)

@@ -24,8 +24,10 @@ struct DockAnchor: Equatable {
             NSPoint(x: dockFrame.maxX - gap - size.width, y: dockFrame.maxY - center - size.height / 2)
         }
         if let visible {
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+            // Outer max last: a panel bigger than `visible` keeps its left and bottom edges on
+            // screen — the other order slid it off to the left, taking its content with it.
+            origin.x = max(min(origin.x, visible.maxX - size.width - 8), visible.minX + 8)
+            origin.y = max(min(origin.y, visible.maxY - size.height - 8), visible.minY + 8)
         }
         return NSRect(origin: origin, size: size)
     }

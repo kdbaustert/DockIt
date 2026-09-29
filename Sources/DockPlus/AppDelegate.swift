@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updateChannels = UpdateChannels()
     /// nil in a build with no feed (every plain `build.sh` build), where an updater could only fail.
     private var updater: SPUStandardUpdaterController?
+    /// Held so the sources stay armed; see `installSignalHandlers`.
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = DockModel(settings: settings)
@@ -67,7 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarItem = MenuBarItem(settings: settings, updater: updater)
         settingsSync = SettingsSync(settings: settings)
-        if settings.hidesSystemDock { SystemDock.hide() }
+        if settings.hidesSystemDock {
+            SystemDock.hide()
+        } else {
+            // A restore whose writes failed keeps the saved originals (they are the only copy);
+            // finish it now. A no-op when nothing is saved.
+            SystemDock.restore()
+        }
+        installSignalHandlers()
         startWatchdog()
         observeContinuously(ownedBy: self) { [settings] in
             _ = settings.hidesSystemDock
@@ -94,6 +103,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdog.tolerance = 1
         RunLoop.main.add(watchdog, forMode: .common)
         self.watchdog = watchdog
+    }
+
+    /// `killall DockPlus`, Activity Monitor's Quit and a shutdown running late all arrive as bare
+    /// signals: the process exits with no delegate callback (SIGTERM measured: status 143), and the
+    /// macOS Dock stayed hidden with nothing left to bring it back. Dispatch sources rather than
+    /// `signal` handlers, which may only call async-signal-safe functions — a restore runs
+    /// `defaults` and `killall`. Same rule as the system-quit path in `applicationShouldTerminate`:
+    /// with the login item on, the next login re-hides anyway, and restoring would only flash the
+    /// Dock through it. SIGKILL and real crashes cannot be caught; after those the saved originals
+    /// survive, and the next launch resumes hiding from them or finishes the restore.
+    private func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    if let self, self.settings.hidesSystemDock, SMAppService.mainApp.status != .enabled {
+                        // The watchdog would re-hide the Dock from inside the restore, whose waits
+                        // spin the run loop.
+                        self.watchdog?.invalidate()
+                        SystemDock.restore()
+                    }
+                    exit(128 + sig)
+                }
+            }
+            source.resume()
+            signalSources.append(source)
+        }
     }
 
     /// With the display asleep, or another user's session in front after a fast user switch, no one

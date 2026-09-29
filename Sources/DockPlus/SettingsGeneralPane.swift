@@ -128,7 +128,7 @@ struct GeneralPane: View {
                     title: "Sync settings with iCloud",
                     // A failed write says so here; it used to reach only the log.
                     subtitle: SettingsSync.current?.lastError.map { "Last sync failed: \($0)" }
-                        ?? "Size, magnification, hover, pinned apps, stacks and hidden apps.",
+                        ?? "Nearly every setting — appearance, behavior, widgets, pinned apps and stacks. Display choices stay on each Mac.",
                     isOn: $settings.syncsWithICloud)
                     .disabled(!SettingsSync.isAvailable)
             }

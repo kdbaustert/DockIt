@@ -211,7 +211,11 @@ final class PreviewController {
     private func present(_ view: AnyView, at anchor: DockAnchor) {
         host.rootView = view
         let visible = (clampScreen ?? NSScreen.screens.first)?.visibleFrame
-        panel.setFrame(anchor.frame(for: host.fittingSize, within: visible), display: true)
+        var size = host.fittingSize
+        // Enough windows outgrow the screen, and a panel wider than `visible` slid its left edge
+        // off it. The thumbnails are flexible, so a narrower panel shrinks them to fit instead.
+        if let visible { size.width = min(size.width, visible.width - 16) }
+        panel.setFrame(anchor.frame(for: size, within: visible), display: true)
         panel.orderFrontRegardless()
     }
 }
@@ -255,6 +259,9 @@ private struct PreviewStrip: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
                 }
+                // The thumbnail's own cap. Without it a long window title is what sizes the tile:
+                // the Text's one-line ideal width is the whole title, and nothing above narrows it.
+                .frame(maxWidth: 220)
                 .contentShape(Rectangle())
                 .onTapGesture { raise(thumb.id) }
                 .accessibilityElement(children: .combine)

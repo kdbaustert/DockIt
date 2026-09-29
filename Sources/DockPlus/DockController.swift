@@ -260,7 +260,14 @@ final class DockController {
         updateAutoHide(onEdge: onEdge && alongBar, across: across, overBar: overBar)
 
         let hoveredIndex = overBar ? layout.index(at: along) : nil
-        if model.drag != nil { trackDrag(over: hoveredIndex) }
+        // On all displays, only the dock on the pointer's display drives the drag: the others read
+        // the pointer as off their bar and closed the gap this one had just set — the icons
+        // flickered apart and together, and a drop could land with no gap left to commit. In every
+        // other mode this is the only controller, so it must track wherever the pointer is.
+        if model.drag != nil,
+            settings.displayMode != .all || NSMouseInRect(mouse, screen.frame, false) {
+            trackDrag(over: hoveredIndex)
+        }
         // Nothing is hovered while an icon is carried: no preview, and no name over the gap.
         let hoveredItem = model.drag != nil ? nil
             : hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
