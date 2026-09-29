@@ -7,6 +7,8 @@ import ScreenCaptureKit
 struct WindowThumb: Identifiable, @unchecked Sendable {
     let id: CGWindowID
     let title: String
+    /// Where the window is, in window-server coordinates (y down from the primary display's top).
+    let frame: CGRect
     let image: CGImage
 }
 
@@ -47,9 +49,25 @@ enum WindowCapture {
             // cannot decide it: Electron apps claim no windows at all.
             return window.isOnScreen || isOnSomeSpace(window.windowID) || axClaimed.contains(window.windowID)
         }.prefix(10)
+        return await captureAll(Array(windows), maxHeight: maxHeight)
+    }
 
-        // In parallel, but back in front-to-back order. SCWindow is not Sendable; the wrapper only
-        // carries it into the child task, which is the pattern Cmd-Tab uses.
+    /// Several windows by id from one enumeration of the window list — the minimized-window tiles,
+    /// where a sweep can turn up several at once and each alone cost a full `SCShareableContent`
+    /// round trip. Windows that are gone, or capture blank, are left out.
+    nonisolated static func windowThumbnails(ids: [CGWindowID], maxHeight: CGFloat) async -> [WindowThumb] {
+        guard !ids.isEmpty,
+              let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+        else { return [] }
+        let wanted = Set(ids)
+        return await captureAll(content.windows.filter { wanted.contains($0.windowID) }, maxHeight: maxHeight)
+    }
+
+    /// In parallel, but back in the order given — front-to-back, for a pid's windows. A blank capture
+    /// is no picture and is left out, which keeps a minimized tile on its app-icon fallback.
+    private nonisolated static func captureAll(_ windows: [SCWindow], maxHeight: CGFloat) async -> [WindowThumb] {
+        // SCWindow is not Sendable; the wrapper only carries it into the child task, which is the
+        // pattern Cmd-Tab uses.
         struct Job: @unchecked Sendable {
             let index: Int
             let window: SCWindow
@@ -62,7 +80,8 @@ enum WindowCapture {
                         return nil
                     }
                     return (job.index, WindowThumb(
-                        id: job.window.windowID, title: job.window.title ?? "", image: image))
+                        id: job.window.windowID, title: job.window.title ?? "", frame: job.window.frame,
+                        image: image))
                 }
             }
             var out: [(Int, WindowThumb)] = []
@@ -137,27 +156,7 @@ enum WindowCapture {
     /// The windows the app itself lists over Accessibility. Empty for Electron apps — and when the
     /// permission is missing — so membership can only ever rescue a window, never veto one.
     private nonisolated static func axWindowIDs(pid: pid_t) -> Set<CGWindowID> {
-        guard let getWindowID = WindowActions.getWindowIDFn, let windows = WindowActions.windows(of: pid) else {
-            return []
-        }
-        var out: Set<CGWindowID> = []
-        for window in windows {
-            var id: CGWindowID = 0
-            if getWindowID(window, &id) == .success, id != 0 { out.insert(id) }
-        }
-        return out
-    }
-
-    /// One window's snapshot by id — the minimized-window tiles use it, where there is no pid-wide
-    /// capture to share.
-    nonisolated static func windowThumbnail(windowID: CGWindowID, maxHeight: CGFloat) async -> CGImage? {
-        guard let content = try? await SCShareableContent
-            .excludingDesktopWindows(true, onScreenWindowsOnly: false),
-            let window = content.windows.first(where: { $0.windowID == windowID })
-        else { return nil }
-        // A blank capture is no picture; nil keeps the tile on its app-icon fallback.
-        guard let image = await capture(window, maxHeight: maxHeight), !isBlank(image) else { return nil }
-        return image
+        Set((WindowActions.windows(of: pid) ?? []).compactMap(WindowActions.windowID(of:)))
     }
 
     /// Captured straight at thumbnail size rather than scaled afterwards.
@@ -218,8 +217,48 @@ enum WindowActions {
         return value as? [AXUIElement]
     }
 
-    /// Whether closing a window has shown the Accessibility prompt in this run.
+    /// The window server's id for an AX window; nil when the bridge is missing or it will not say.
+    nonisolated static func windowID(of window: AXUIElement) -> CGWindowID? {
+        guard let getWindowIDFn else { return nil }
+        var id: CGWindowID = 0
+        guard getWindowIDFn(window, &id) == .success, id != 0 else { return nil }
+        return id
+    }
+
+    nonisolated static func isMinimized(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success else {
+            return false
+        }
+        return (value as? Bool) == true
+    }
+
+    nonisolated static func string(of element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    nonisolated static func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success
+        else { return [] }
+        return value as? [AXUIElement] ?? []
+    }
+
+    /// Whether the Accessibility prompt has been shown in this run — one flag for every caller, so a
+    /// restore from the dock and a close from a preview never prompt twice.
     private static var hasPromptedForAccessibility = false
+
+    /// Whether DockIt may use Accessibility. The system prompt is shown the first time this is asked
+    /// in each run, not on every click; after that the permission is only checked.
+    static func requestAccessibilityOnce() -> Bool {
+        guard !hasPromptedForAccessibility else { return AXIsProcessTrusted() }
+        hasPromptedForAccessibility = true
+        // The option's key as a literal: the exported `kAXTrustedCheckOptionPrompt` is a mutable
+        // global, which Swift 6 will not read from here.
+        return AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    }
 
     private typealias SetFrontFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UInt32, UInt32) -> OSStatus
     private typealias PostEventFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> OSStatus
@@ -302,12 +341,8 @@ enum WindowActions {
     static func close(_ windowID: CGWindowID, pid: pid_t) {
         guard let window = element(for: windowID, pid: pid) else {
             // The close button is only reachable over Accessibility. Without it the click would do
-            // nothing and say nothing, so ask for it — once per run, as DockModel's restore does.
-            if !hasPromptedForAccessibility, !AXIsProcessTrusted() {
-                hasPromptedForAccessibility = true
-                // The option's key as a literal: `kAXTrustedCheckOptionPrompt` is a mutable global.
-                _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-            }
+            // nothing and say nothing, so ask for it — once per run, shared with DockModel's restore.
+            if !AXIsProcessTrusted() { _ = requestAccessibilityOnce() }
             return
         }
         var button: CFTypeRef?
@@ -318,13 +353,7 @@ enum WindowActions {
     }
 
     private static func element(for windowID: CGWindowID, pid: pid_t) -> AXUIElement? {
-        guard AXIsProcessTrusted(), let getWindowID = Self.getWindowIDFn, let windows = windows(of: pid) else {
-            return nil
-        }
-        for window in windows {
-            var id: CGWindowID = 0
-            if getWindowID(window, &id) == .success, id == windowID { return window }
-        }
-        return nil
+        guard AXIsProcessTrusted(), Self.getWindowIDFn != nil, let windows = windows(of: pid) else { return nil }
+        return windows.first { Self.windowID(of: $0) == windowID }
     }
 }

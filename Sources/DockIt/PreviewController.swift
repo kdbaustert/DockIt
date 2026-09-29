@@ -15,7 +15,7 @@ final class PreviewController {
     private static let thumbHeight: CGFloat = 140
 
     private let settings: DockSettings
-    private let panel = PreviewPanel()
+    private let panel = DockPopupPanel()
     private let host = FirstMouseHostingView(rootView: AnyView(EmptyView()))
 
     private var shownItemID: String?
@@ -33,6 +33,8 @@ final class PreviewController {
 
     /// While the pointer is in the panel, the dock must not auto-hide under it.
     var keepsDockShown: Bool { panel.isVisible && pointerInPanel }
+    /// Up, or on its way up: either way the dwell and the leave grace still run on the pointer ticks.
+    var isActive: Bool { panel.isVisible || captureTask != nil || hoverStart != nil }
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -65,7 +67,7 @@ final class PreviewController {
             }
             let dwell = panel.isVisible ? min(settings.previewDelay, Self.switchDelay) : settings.previewDelay
             if let start = hoverStart, Date().timeIntervalSince(start) >= dwell {
-                show(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+                show(item, at: DockAnchor(center: center, dockFrame: dockFrame, edge: edge, barReach: barReach))
             }
         } else if pointerInPanel {
             leftAt = nil
@@ -104,7 +106,7 @@ final class PreviewController {
         host.rootView = AnyView(EmptyView())
     }
 
-    private func show(_ item: DockItem, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
+    private func show(_ item: DockItem, at anchor: DockAnchor) {
         guard let pid = item.pid else { return }
         shownItemID = item.id
 
@@ -112,19 +114,21 @@ final class PreviewController {
             // The system prompt the first time; the pointer to Settings each time after.
             WindowCapture.askForPermissionOnce()
             if !WindowCapture.canCapture {
-                present(AnyView(PermissionStrip()), center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+                present(AnyView(PermissionStrip()), at: anchor)
             }
             return
         }
 
         captureTask?.cancel()
         captureTask = Task { [weak self] in
-            let thumbs = await WindowCapture.thumbnails(pid: pid, maxHeight: Self.thumbHeight)
+            let captured = await WindowCapture.thumbnails(pid: pid, maxHeight: Self.thumbHeight)
             guard let self, !Task.isCancelled, shownItemID == item.id else { return }
             captureTask = nil
+            let thumbs = onThisDisplay(captured)
             guard !thumbs.isEmpty else {
-                // Running, but nothing to show — a windowless agent, every capture came up blank, or
-                // the window list could not be read (`thumbnails` answers a thrown error with none).
+                // Running, but nothing to show — a windowless agent, every capture came up blank, the
+                // window list could not be read (`thumbnails` answers a thrown error with none), or
+                // every window is on another display's dock.
                 // Not `hide()`: that forgets the hover, and the next dwell would capture again.
                 // The refresh timer goes, though: with the panel down it has nothing to refresh.
                 refreshTimer?.invalidate()
@@ -148,19 +152,40 @@ final class PreviewController {
                         try? await Task.sleep(for: .milliseconds(450))
                         guard let self, shownItemID == item.id else { return }
                         shownItemID = nil
-                        show(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+                        show(item, at: anchor)
                     }
                 }
             )
-            present(AnyView(strip), center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
-            startRefresh(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+            present(AnyView(strip), at: anchor)
+            startRefresh(item, at: anchor)
         }
+    }
+
+    /// Every thumbnail, unless each display's dock is to show only its own screen's windows. After
+    /// the capture rather than before, from the frames that come back with it: filtering first would
+    /// need the screen threaded into WindowCapture, to save only the other screens' captures.
+    private func onThisDisplay(_ thumbs: [WindowThumb]) -> [WindowThumb] {
+        guard settings.previewsShowOnlyThisDisplay, settings.displayMode == .all,
+              let displayID = clampScreen?.displayID
+        else { return thumbs }
+        let display = CGDisplayBounds(displayID)
+        return thumbs.filter { Self.isMostlyOn($0.frame, display: display) }
+    }
+
+    /// Whether more than half of `frame` lies on `display`, both in window-server coordinates (which
+    /// is what `CGDisplayBounds` and ScreenCaptureKit's frames share). More than half, so a window
+    /// straddling two screens shows on at most one dock — the one whose screen holds most of it.
+    nonisolated static func isMostlyOn(_ frame: CGRect, display: CGRect) -> Bool {
+        let area = frame.width * frame.height
+        guard area > 0 else { return false }
+        let overlap = frame.intersection(display)
+        return !overlap.isNull && overlap.width * overlap.height > area / 2
     }
 
     /// "Live" previews: the open panel re-captures on a beat. Fresh screenshots rather than a video
     /// stream — a stream per window needs lifecycle the panel does not, and at this cadence the eye
     /// reads stills as live for anything but full-motion video.
-    private func startRefresh(_ item: DockItem, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
+    private func startRefresh(_ item: DockItem, at anchor: DockAnchor) {
         refreshTimer?.invalidate()
         refreshTimer = nil
         guard settings.livePreviews else { return }
@@ -175,7 +200,7 @@ final class PreviewController {
                 }
                 guard self.panel.isVisible, self.shownItemID == item.id, self.captureTask == nil else { return }
                 self.shownItemID = nil  // let show() run again for the same item
-                self.show(item, center: center, dockFrame: dockFrame, edge: edge, barReach: barReach)
+                self.show(item, at: anchor)
             }
         }
         timer.tolerance = 0.2
@@ -183,27 +208,10 @@ final class PreviewController {
         refreshTimer = timer
     }
 
-    private func present(_ view: AnyView, center: CGFloat, dockFrame: NSRect, edge: DockEdge, barReach: CGFloat) {
+    private func present(_ view: AnyView, at anchor: DockAnchor) {
         host.rootView = view
-        let size = host.fittingSize
-        // Just clear of the (magnified) icons: the strip's own 4pt transparent margin leaves the
-        // glass 8pt off them. It covers the hovered app's name label, which the previews make
-        // redundant; clearing the label as well left a gap taller than a small icon.
-        let gap = barReach + 4.0
-        var origin = switch edge {
-        case .bottom:
-            NSPoint(x: dockFrame.minX + center - size.width / 2, y: dockFrame.minY + gap)
-        case .left:
-            NSPoint(x: dockFrame.minX + gap, y: dockFrame.maxY - center - size.height / 2)
-        case .right:
-            NSPoint(x: dockFrame.maxX - gap - size.width, y: dockFrame.maxY - center - size.height / 2)
-        }
-        if let screen = clampScreen ?? NSScreen.screens.first {
-            let visible = screen.visibleFrame
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-        }
-        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        let visible = (clampScreen ?? NSScreen.screens.first)?.visibleFrame
+        panel.setFrame(anchor.frame(for: host.fittingSize, within: visible), display: true)
         panel.orderFrontRegardless()
     }
 }
@@ -279,24 +287,4 @@ private struct PermissionStrip: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .padding(4)
     }
-}
-
-/// Same shape as `DockPanel`: never key, so a preview click cannot steal the user's focus — the
-/// hosting view's first-mouse acceptance is what makes the click land anyway. Above the dock's own
-/// level, as a menu would be.
-private final class PreviewPanel: NSPanel {
-    init() {
-        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = false
-        level = .popUpMenu
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        isReleasedWhenClosed = false
-        hidesOnDeactivate = false
-        canHide = false
-    }
-
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
 }

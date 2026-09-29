@@ -45,6 +45,11 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>DockIt asks Finder to empty the Trash, and Spotify or Music what is playing for the Now Playing widget.</string>
+	<!-- Asked for only when the Calendar widget is turned on. No entitlement goes with it: build.sh
+	     signs without the hardened runtime, which is what would require
+	     com.apple.security.personal-information.calendars. -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>DockIt shows your next event today in the Calendar widget.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

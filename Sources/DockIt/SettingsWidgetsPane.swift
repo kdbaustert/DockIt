@@ -19,8 +19,20 @@ struct WidgetsPane: View {
                 SettingsToggle(title: "Fahrenheit", isOn: $settings.weatherFahrenheit)
                     .disabled(!settings.showsWeather)
                 SettingsToggle(title: "Clock", isOn: $settings.showsClock)
+                // The calendar's times follow it too, so the two tiles never disagree.
                 SettingsToggle(title: "24-hour time", isOn: $settings.clock24Hour)
-                    .disabled(!settings.showsClock)
+                    .disabled(!settings.showsClock && !settings.showsCalendar)
+                SettingsToggle(
+                    title: "Calendar",
+                    subtitle: "Your next event today. macOS asks once for access to your calendars when you turn this on.",
+                    isOn: calendarBinding)
+                CalendarAccessRow(settings: settings)
+                // Not offered at all without a battery: the tile could never show.
+                if WidgetsModel.hasBattery {
+                    SettingsToggle(
+                        title: "Battery", subtitle: "Charge level, and whether it is charging.",
+                        isOn: $settings.showsBattery)
+                }
             }
             SettingsSection(
                 title: "Spacers", anchor: SettingsAnchor.spacers,
@@ -34,6 +46,38 @@ struct WidgetsPane: View {
                         Button("Add Spacer") { settings.addSpacer() }
                         Button("Remove All") { settings.removeAllSpacers() }
                             .disabled(settings.spacerCount == 0)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Turning the widget on here is the one place it asks for calendar access — a switch the user
+    /// just flipped, rather than a prompt at launch or when sync turns it on from another Mac.
+    private var calendarBinding: Binding<Bool> {
+        Binding(
+            get: { settings.showsCalendar },
+            set: { on in
+                settings.showsCalendar = on
+                if on { WidgetsModel.shared.requestCalendarAccess() }
+            })
+    }
+}
+
+/// Appears only while the widget is on and access is missing, and says where to give it back.
+private struct CalendarAccessRow: View {
+    let settings: DockSettings
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        if settings.showsCalendar, widgets.calendarAccess == .denied {
+            SettingsRow(
+                title: "Calendar access is off",
+                subtitle: "Turn on DockIt in System Settings › Privacy & Security › Calendars."
+            ) {
+                Button("Open System Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                        NSWorkspace.shared.open(url)
                     }
                 }
             }

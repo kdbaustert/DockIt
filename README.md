@@ -18,14 +18,17 @@ sight.
 
 - **Pinned and running apps**, with Finder always first and the Trash at the end. Drag icons to
   reorder them, drop apps on the dock to pin them, and drop files on an app to open them with it.
+- **Recent apps.** Optionally, the last three apps you quit appear after the running apps, as
+  with the macOS Dock's "Show suggested and recent apps" option.
 - **Badges.** Unread counts from Mail, Messages, Slack and other apps show on their icons, as
   they do in the macOS Dock.
 - **Window previews.** Rest the pointer on a running app to see its windows, then click one to go
   to it, even on another Desktop or display.
 - **Minimized windows** sit beside the Trash as their own snapshot tiles, as in the macOS Dock.
-- **Widgets:** now playing (Spotify and Music, with playback controls), weather and a clock. You
-  can reorder them by dragging.
-- **Stacks** for folders such as Downloads, and **spacers** to group icons.
+- **Widgets:** now playing (Spotify and Music, with playback controls), weather, a clock, your
+  next calendar event today, and battery charge on Macs that have a battery. You can reorder them
+  by dragging.
+- **Stacks** for folders such as Downloads, shown as a menu or a grid, each with its own sort order and subfolders you can open, and **spacers** to group icons.
 - **Magnification**, with adjustable amount and reach, and an option to start growing as the
   pointer approaches.
 - **Auto-hide**, with adjustable sensitivity, delay and speed.
@@ -61,6 +64,7 @@ Permissions**.
 - **Accessibility** to restore, close and switch to specific windows, and to show app badges.
 - **Automation** to control Finder (emptying the Trash) and Spotify or Music (the now playing
   widget).
+- **Calendars**, only if you turn on the calendar widget, to show your next event.
 
 ## Privacy
 
@@ -70,6 +74,10 @@ No telemetry, analytics, crash reporting, or account. DockIt makes only these ne
   about you or your Mac.
 - If you turn on the weather widget, the city you enter goes to
   [Open-Meteo](https://open-meteo.com) to look up its forecast. The widget is off by default.
+
+The calendar widget reads today's events on your Mac to show the next one. Nothing from your
+calendars leaves your Mac, and DockIt asks for access only when you turn the widget on. The recent
+apps list is kept on your Mac and is not synced through iCloud with your other settings.
 
 ## Contributing
 

@@ -24,6 +24,15 @@ struct ApplicationsPane: View {
                 }
             }
             SettingsSection(
+                title: "Recent apps", anchor: SettingsAnchor.recent,
+                footer: "Apps you quit lately that aren't pinned, after the running apps. Remembered on this Mac only, and only while this is on."
+            ) {
+                SettingsToggle(
+                    title: "Show recent apps in the dock",
+                    subtitle: "The last \(DockModel.recentAppsShown), as the macOS Dock shows them.",
+                    isOn: $settings.showsRecentApps)
+            }
+            SettingsSection(
                 title: "Hidden apps", anchor: SettingsAnchor.hidden,
                 footer: "Never shown in the dock, even while running. Right-click an app in the dock ▸ Hide from Dock to add one."
             ) {

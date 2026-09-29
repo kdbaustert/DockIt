@@ -63,6 +63,14 @@ struct DockView: View {
                         ClockTile(width: size, height: metrics.iconSize)
                             .onDrag { model.dragPayload(for: item) }
                             .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .battery:
+                        BatteryTile(width: size, height: metrics.iconSize)
+                            .onDrag { model.dragPayload(for: item) }
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                    case .calendar:
+                        CalendarTile(width: size, height: metrics.iconSize)
+                            .onDrag { model.dragPayload(for: item) }
+                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
                     case .app, .folder, .trash:
                         DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
                     }
@@ -141,7 +149,8 @@ private struct DockIcon: View {
                 if isHovered { label.transition(.asymmetric(insertion: .opacity, removal: .identity)) }
             }
             .contentShape(Rectangle())
-            .onTapGesture { model.open(item) }
+            // The keys held now, at the click, for Command- and Option-clicks.
+            .onTapGesture { model.click(item, modifiers: NSEvent.modifierFlags) }
             .contextMenu {
                 DockItemMenu(item: item, model: model)
                 Divider()
@@ -156,12 +165,23 @@ private struct DockIcon: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityAddTraits(.isButton)
             // The tap gesture is not an action VoiceOver can press; this is.
-            .accessibilityAction { model.open(item) }
+            .accessibilityAction { model.click(item, modifiers: []) }
+            // The context menu's shortcuts. Unhide needs none: the press above brings a hidden app back.
+            .accessibilityActions {
+                if item.kind == .app, item.isRunning {
+                    Button("Hide") { model.hide(item) }
+                }
+                if item.url != nil {
+                    Button("Show in Finder") { model.reveal(item) }
+                }
+            }
     }
 
     private var accessibilityValue: String {
         var parts: [String] = []
         if item.kind == .app, item.isRunning { parts.append("running") }
+        // Neither pinned nor running, an app tile can only be one of the recent apps.
+        if item.kind == .app, !item.isPinned, !item.isRunning { parts.append("recent") }
         if isBouncing { parts.append("launching") }
         if let badge = model.badges[item.id] { parts.append("badge \(badge)") }
         if item.kind == .trash, model.trashIsFull { parts.append("full") }
@@ -211,6 +231,17 @@ private struct DockItemMenu: View {
     var body: some View {
         switch item.kind {
         case .app:
+            if item.isRunning, let pid = item.pid {
+                AppWindowList(pid: pid, model: model)
+                Button("Show All Windows") { model.showAllWindows(item) }
+                // Read as the menu is built, which is when it opens; nothing observes it otherwise.
+                if NSRunningApplication(processIdentifier: pid)?.isHidden == true {
+                    Button("Unhide") { model.unhide(item) }
+                } else {
+                    Button("Hide") { model.hide(item) }
+                }
+                Divider()
+            }
             if item.isRunning && item.id != DockModel.finderID {
                 Button("Quit") { model.quit(item) }
                 Button("Force Quit") { model.forceQuit(item) }
@@ -233,8 +264,13 @@ private struct DockItemMenu: View {
                 Button("Show in Finder") { model.reveal(item) }
             }
         case .folder:
-            Button("Open") { model.open(item) }
+            // What a click does, so a Grid stack opens as its grid.
+            Button("Open") { model.click(item, modifiers: []) }
             Button("Show in Finder") { model.reveal(item) }
+            if let url = item.url {
+                StackSortMenu(path: url.path, settings: model.settings)
+                StackDisplayMenu(path: url.path, settings: model.settings)
+            }
             Divider()
             Button("Remove from Dock") { model.unpin(item) }
         case .trash:
@@ -247,8 +283,26 @@ private struct DockItemMenu: View {
             }
         case .spacer:
             Button("Remove from Dock") { model.unpin(item) }
-        case .separator, .nowPlaying, .weather, .clock:
+        case .separator, .nowPlaying, .weather, .clock, .battery, .calendar:
             EmptyView()
+        }
+    }
+}
+
+/// The app's windows at the top of its menu, as the macOS Dock lists them; choosing one raises it.
+/// Empty for a moment on the first open: the list is asked for as the menu is built and arrives
+/// off the main thread — see `DockModel.requestMenuWindows`.
+private struct AppWindowList: View {
+    let pid: pid_t
+    let model: DockModel
+
+    var body: some View {
+        let _ = model.requestMenuWindows(for: pid)
+        if let listed = model.menuWindows, listed.pid == pid, !listed.windows.isEmpty {
+            ForEach(listed.windows, id: \.id) { window in
+                Button(window.title) { WindowActions.raise(window.id, pid: pid) }
+            }
+            Divider()
         }
     }
 }
@@ -343,7 +397,7 @@ private struct MinimizedTile: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             } else {
                 // The snapshot arrives late; until then, the owning app's icon marks the spot.
-                Image(nsImage: item.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.icon } ?? NSImage())
+                Image(nsImage: model.icon(for: item))
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .opacity(0.8)
@@ -367,8 +421,7 @@ private struct MinimizedTile: View {
 
     /// The window's title and whose it is — a title alone ("Untitled") says little.
     private var accessibilityLabel: String {
-        let app = item.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
-        return ["Minimized window", item.name.isEmpty ? nil : item.name, app].compactMap(\.self).joined(separator: ", ")
+        ["Minimized window", item.name.isEmpty ? nil : item.name, item.appName].compactMap(\.self).joined(separator: ", ")
     }
 }
 
@@ -522,6 +575,131 @@ private struct ClockTile: View {
             Button("Remove from Dock") { DockSettings.shared.showsClock = false }
             Divider()
             DockMenuFooter()
+        }
+    }
+}
+
+private struct BatteryTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: widgets.battery?.symbol ?? "battery.0percent")
+                .font(.system(size: height * 0.3))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(widgets.battery.map { "\($0.percent)%" } ?? "--%")
+                    .font(.system(size: height * 0.3, weight: .semibold))
+                Text(widgets.battery?.status ?? "")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 6)
+        .widgetTile(width: width, height: height)
+        // The symbol is decoration here; the words carry it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery")
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityValue(widgets.battery.map { "\($0.percent)%, \($0.status.lowercased())" } ?? "")
+        .contextMenu {
+            // The same setting as Settings ▸ Widgets ▸ Battery.
+            Button("Remove from Dock") { DockSettings.shared.showsBattery = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+}
+
+/// The next event today. Until access is granted it stands in for the permission instead: a click
+/// asks for it, or once refused, opens the pane in System Settings where it is given back.
+private struct CalendarTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "calendar")
+                .font(.system(size: height * 0.36))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 7)
+        .widgetTile(width: width, height: height)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: press)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Calendar")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { press() }
+        .contextMenu {
+            switch widgets.calendarAccess {
+            case .granted: Button("Open Calendar") { openCalendar() }
+            case .notDetermined: Button("Allow Calendar Access…") { widgets.requestCalendarAccess() }
+            case .denied: Button("Open Calendar Privacy Settings…") { openPrivacySettings() }
+            }
+            Divider()
+            // The same setting as Settings ▸ Widgets ▸ Calendar.
+            Button("Remove from Dock") { DockSettings.shared.showsCalendar = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+
+    private var title: String {
+        switch widgets.calendarAccess {
+        case .granted: widgets.calendarTitle ?? "No more events"
+        case .notDetermined: "Calendar"
+        case .denied: "Not Allowed"
+        }
+    }
+
+    private var subtitle: String {
+        switch widgets.calendarAccess {
+        case .granted: widgets.calendarTitle == nil ? "Today" : widgets.calendarTime
+        case .notDetermined: "Click to allow access"
+        case .denied: "Allow in System Settings"
+        }
+    }
+
+    private var accessibilityValue: String {
+        switch widgets.calendarAccess {
+        case .granted:
+            guard let event = widgets.calendarTitle else { return "No more events today" }
+            return "\(event), \(widgets.calendarTime)"
+        case .notDetermined: return "Press to allow access to your calendars"
+        case .denied: return "DockIt is not allowed to read your calendars"
+        }
+    }
+
+    private func press() {
+        switch widgets.calendarAccess {
+        case .granted: openCalendar()
+        case .notDetermined: widgets.requestCalendarAccess()
+        case .denied: openPrivacySettings()
+        }
+    }
+
+    private func openCalendar() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Calendar.app"))
+    }
+
+    private func openPrivacySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+            NSWorkspace.shared.open(url)
         }
     }
 }

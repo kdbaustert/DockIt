@@ -1,0 +1,208 @@
+import Foundation
+
+// MARK: - Weather (Open-Meteo: keyless, and fine with a request every 15 minutes)
+
+extension WidgetsModel {
+    func configureWeather() {
+        weatherTimer?.invalidate()
+        weatherTimer = nil
+        weatherTask?.cancel()
+        weatherRetry?.cancel()
+        weatherRetry = nil
+        guard settings.showsWeather, !settings.weatherLocation.isEmpty else {
+            // All of the reading: the temperature alone left the old city and its high and low.
+            weatherTemperature = nil
+            weatherPlace = ""
+            weatherHighLow = ""
+            weatherReadingLocation = nil
+            return
+        }
+        refreshWeather()
+        let timer = Timer(timeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshWeather() }
+        }
+        timer.tolerance = 60
+        RunLoop.main.add(timer, forMode: .common)
+        weatherTimer = timer
+    }
+
+    private func refreshWeather() {
+        let place = settings.weatherLocation
+        let fahrenheit = settings.weatherFahrenheit
+        // Coordinates picked from the city search win over geocoding the typed name: the search
+        // already disambiguated ("Springfield" names dozens of places).
+        let pinned: Located? = settings.weatherLatitude != 0 || settings.weatherLongitude != 0
+            ? Located(name: place, latitude: settings.weatherLatitude, longitude: settings.weatherLongitude)
+            : nil
+        weatherTask?.cancel()
+        weatherTask = Task { [weak self] in
+            // Not `??`: its right side is an autoclosure, which cannot await.
+            let located: Located?
+            if let pinned {
+                located = pinned
+            } else {
+                located = await Self.geocode(place)
+            }
+            var current: Current?
+            if let located {
+                current = await Self.forecast(
+                    latitude: located.latitude, longitude: located.longitude, fahrenheit: fahrenheit)
+            }
+            // A cancelled fetch was superseded or switched off; it neither shows nor retries.
+            guard let self, !Task.isCancelled else { return }
+            guard let located, let current else { return weatherFailed(for: place) }
+            weatherReadingLocation = place
+            weatherPlace = Self.abbreviatingState(located.name)
+            weatherTemperature = "\(Int(current.temperature.rounded()))°"
+            weatherHighLow = "↑\(Int(current.high.rounded())) ↓\(Int(current.low.rounded()))"
+            weatherSymbol = Self.symbol(for: current.code)
+        }
+    }
+
+    /// A reading for another location is wrong, not stale, so it goes; "--°" is honest. Then one
+    /// retry a minute on: a transient failure at launch otherwise leaves "--°" a whole cycle. It
+    /// fires only if nothing has changed or succeeded since.
+    private func weatherFailed(for place: String) {
+        if weatherReadingLocation != place {
+            weatherReadingLocation = nil
+            weatherTemperature = nil
+            weatherPlace = ""
+            weatherHighLow = ""
+        }
+        weatherRetry?.cancel()
+        weatherRetry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            guard let self, settings.showsWeather, settings.weatherLocation == place, weatherTemperature == nil
+            else { return }
+            weatherRetry = nil
+            refreshWeather()
+        }
+    }
+
+    private struct Located: Sendable { let name: String; let latitude: Double; let longitude: Double }
+
+    /// One city-search hit, ready for a results list.
+    struct City: Identifiable, Sendable {
+        let name: String
+        let region: String
+        let country: String
+        let latitude: Double
+        let longitude: Double
+        var id: String { "\(latitude),\(longitude)" }
+        var label: String {
+            [name, region, country].filter { !$0.isEmpty }.joined(separator: ", ")
+        }
+        /// City and state — what the dock shows. The country only helps tell hits apart in the list.
+        var placeName: String { Self.placeName(name, region: region, country: country) }
+
+        nonisolated static func placeName(_ name: String, region: String, country: String) -> String {
+            [name, region.isEmpty ? country : region].filter { !$0.isEmpty }.joined(separator: ", ")
+        }
+
+        /// One geocoder result. A hit without a name takes `fallbackName` when there is one; without
+        /// either, or without coordinates, it is no place at all.
+        nonisolated init?(hit: [String: Any], fallbackName: String? = nil) {
+            guard let name = hit["name"] as? String ?? fallbackName,
+                  let latitude = hit["latitude"] as? Double,
+                  let longitude = hit["longitude"] as? Double
+            else { return nil }
+            self.name = name
+            self.region = hit["admin1"] as? String ?? ""
+            self.country = hit["country"] as? String ?? ""
+            self.latitude = latitude
+            self.longitude = longitude
+        }
+    }
+
+    /// The geocoder's best matches for a partial name — what the Settings search list shows.
+    nonisolated static func searchCities(_ query: String) async -> [City] {
+        await geocoderResults(query, count: 6).compactMap { City(hit: $0) }
+    }
+
+    private struct Current: Sendable { let temperature: Double; let high: Double; let low: Double; let code: Int }
+
+    private nonisolated static func geocode(_ place: String) async -> Located? {
+        guard let city = await geocoderResults(place, count: 1).first.flatMap({ City(hit: $0, fallbackName: place) })
+        else { return nil }
+        return Located(name: city.placeName, latitude: city.latitude, longitude: city.longitude)
+    }
+
+    /// The raw hits for a name, empty on any failure — the request both the search list and the
+    /// typed-name geocode make, differing only in how many they want.
+    private nonisolated static func geocoderResults(_ name: String, count: Int) async -> [[String: Any]] {
+        var parts = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
+        parts.queryItems = [.init(name: "name", value: name), .init(name: "count", value: String(count))]
+        guard let (data, _) = try? await URLSession.shared.data(from: parts.url!),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]]
+        else { return [] }
+        return results
+    }
+
+    private nonisolated static func forecast(latitude: Double, longitude: Double, fahrenheit: Bool) async -> Current? {
+        var parts = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
+        parts.queryItems = [
+            .init(name: "latitude", value: String(latitude)),
+            .init(name: "longitude", value: String(longitude)),
+            .init(name: "current", value: "temperature_2m,weather_code"),
+            .init(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+            .init(name: "forecast_days", value: "1"),
+            .init(name: "timezone", value: "auto"),
+            .init(name: "temperature_unit", value: fahrenheit ? "fahrenheit" : "celsius"),
+        ]
+        guard let (data, _) = try? await URLSession.shared.data(from: parts.url!),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let current = json["current"] as? [String: Any],
+              let temperature = current["temperature_2m"] as? Double,
+              let daily = json["daily"] as? [String: Any],
+              let high = (daily["temperature_2m_max"] as? [Double])?.first,
+              let low = (daily["temperature_2m_min"] as? [Double])?.first
+        else { return nil }
+        return Current(temperature: temperature, high: high, low: low,
+                       code: current["weather_code"] as? Int ?? 0)
+    }
+
+    /// WMO weather codes, coarsely.
+    private nonisolated static func symbol(for code: Int) -> String {
+        switch code {
+        case 0: "sun.max.fill"
+        case 1, 2: "cloud.sun.fill"
+        case 3: "cloud.fill"
+        case 45, 48: "cloud.fog.fill"
+        case 51...67, 80...82: "cloud.rain.fill"
+        case 71...77, 85, 86: "cloud.snow.fill"
+        case 95...99: "cloud.bolt.rain.fill"
+        default: "cloud.fill"
+        }
+    }
+
+    /// The tile's place with a trailing US state as its postal code: "Cincinnati, Ohio" reads
+    /// "Cincinnati, OH". Only on the tile — the setting and the Settings field keep the full name.
+    ///
+    /// Done to the finished string because a pinned place is only a string by the time it gets
+    /// here: the setting stores `placeName`, not the geocoder's fields. Everywhere else is left as
+    /// written: Open-Meteo returns no short form for any region (checked: `admin1` is "Ontario" for
+    /// Toronto, with only a numeric `admin1_id` beside it), so there is nothing to shorten to. The
+    /// one name that is both a state and a country is Georgia, and `placeName` shows a country only
+    /// when the hit had no region — Georgian towns checked (Batumi, Kutaisi) all carry one.
+    nonisolated static func abbreviatingState(_ place: String) -> String {
+        guard let comma = place.range(of: ", ", options: .backwards),
+              let code = usStateCodes[String(place[comma.upperBound...])]
+        else { return place }
+        return String(place[..<comma.upperBound]) + code
+    }
+
+    private nonisolated static let usStateCodes = [
+        "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR", "California": "CA",
+        "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE", "District of Columbia": "DC",
+        "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL", "Indiana": "IN",
+        "Iowa": "IA", "Kansas": "KS", "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+        "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS", "Missouri": "MO",
+        "Montana": "MT", "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH", "New Jersey": "NJ",
+        "New Mexico": "NM", "New York": "NY", "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH",
+        "Oklahoma": "OK", "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI",
+        "South Carolina": "SC", "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+        "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV", "Wisconsin": "WI",
+        "Wyoming": "WY",
+    ]
+}

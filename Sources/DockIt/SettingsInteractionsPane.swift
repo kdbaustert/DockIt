@@ -11,6 +11,11 @@ struct InteractionsPane: View {
                     title: "Automatically hide and show the dock",
                     subtitle: "Slides away when the pointer leaves it; push against the screen edge to bring it back.",
                     isOn: $settings.autoHides)
+                SettingsToggle(
+                    title: "Only when a window overlaps the dock",
+                    subtitle: "Stays shown until a window reaches into the bar, then hides as above.",
+                    isOn: $settings.autoHidesOnlyWhenOverlapped)
+                    .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Reveal sensitivity", subtitle: "How close to the edge the pointer must push.",
                     value: $settings.revealSensitivity, range: 1...20,
@@ -74,6 +79,15 @@ struct InteractionsPane: View {
                     isOn: $settings.bouncesOnLaunch)
             }
             SettingsSection(
+                title: "Clicking", anchor: SettingsAnchor.clicking,
+                footer: "Command-click shows an item in Finder. Option-click opens an app and hides all the others."
+            ) {
+                SettingsToggle(
+                    title: "Click the frontmost app's icon to hide it",
+                    subtitle: "Clicking it again brings it back.",
+                    isOn: $settings.clickHidesFrontmostApp)
+            }
+            SettingsSection(
                 title: "Window previews", anchor: SettingsAnchor.previews,
                 footer: "Previews need Screen Recording permission the first time; DockIt asks when a preview would first appear."
             ) {
@@ -96,6 +110,11 @@ struct InteractionsPane: View {
                     subtitle: "The open panel keeps refreshing its thumbnails.",
                     isOn: $settings.livePreviews)
                     .disabled(!settings.showsWindowPreviews)
+                SettingsToggle(
+                    title: "Show only this display's windows in previews",
+                    subtitle: "With a dock on every display, each shows the windows on its own screen.",
+                    isOn: $settings.previewsShowOnlyThisDisplay)
+                    .disabled(!settings.showsWindowPreviews || settings.displayMode != .all)
             }
             SettingsSection(
                 title: "Windows", anchor: SettingsAnchor.windows,

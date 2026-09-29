@@ -77,9 +77,11 @@ enum SettingsAnchor {
     static let size = "appearance.size"
     static let magnification = "interactions.magnification"
     static let launching = "interactions.launching"
+    static let clicking = "interactions.clicking"
     static let previews = "interactions.previews"
     static let pinned = "applications.pinned"
     static let hidden = "applications.hidden"
+    static let recent = "applications.recent"
     static let stacks = "stacks.folders"
     static let build = "about.build"
 }
@@ -122,6 +124,10 @@ private enum SettingsIndex {
              ["city", "state", "town", "place", "location", "search"]),
         item("clockWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Clock",
              ["clock", "time", "date", "widget", "24"]),
+        item("calendarWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Calendar",
+             ["calendar", "event", "meeting", "next", "agenda", "widget"]),
+        item("batteryWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Battery",
+             ["battery", "charge", "charging", "power", "percent", "widget"]),
         item("spacers", .widgets, SettingsAnchor.spacers, "Spacers", "Add or remove spacers",
              ["spacer", "space", "gap", "spacing", "remove", "add"]),
         item("theme", .appearance, SettingsAnchor.theme, "Theme", "Bar tint",
@@ -162,6 +168,8 @@ private enum SettingsIndex {
              ["hover", "highlight", "intensity", "glow", "brightness", "opacity"]),
         item("bounce", .interactions, SettingsAnchor.launching, "Launching", "Bounce icons while apps open",
              ["bounce", "launch", "opening", "animation", "jump"]),
+        item("clickHides", .interactions, SettingsAnchor.clicking, "Clicking", "Click the frontmost app's icon to hide it",
+             ["click", "hide", "frontmost", "toggle", "command", "option", "modifier"]),
         item("previews", .interactions, SettingsAnchor.previews, "Window previews", "Show window previews on hover",
              ["preview", "thumbnail", "windows", "hover", "peek"]),
         item("previewDelay", .interactions, SettingsAnchor.previews, "Window previews", "Preview delay",
@@ -172,10 +180,13 @@ private enum SettingsIndex {
              ["pin", "keep in dock", "remove", "apps", "applications"]),
         item("hiddenApps", .applications, SettingsAnchor.hidden, "Hidden apps", "Hidden apps",
              ["hide", "hidden", "exclude", "never show", "helper", "background"]),
+        item("recentApps", .applications, SettingsAnchor.recent, "Recent apps", "Show recent apps in the dock",
+             ["recent", "suggested", "recently used", "history", "quit"]),
         item("addApplication", .applications, SettingsAnchor.pinned, "Pinned apps", "Add an application",
              ["add", "pin", "choose", "select", "app", "applications"]),
         item("stacks", .stacks, SettingsAnchor.stacks, "Folders", "Stacks",
-             ["folder", "downloads", "add folder", "stack"]),
+             ["folder", "downloads", "add folder", "stack", "sort", "order", "date added", "kind",
+              "grid", "menu", "view content as", "display"]),
         item("version", .about, SettingsAnchor.build, "DockIt", "Version",
              ["version", "build", "about"]),
         item("sourceCode", .about, SettingsAnchor.build, "DockIt", "Source code",

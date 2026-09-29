@@ -34,8 +34,10 @@ func legacyMagnifyAmount(magnifiedSize: Double, iconSize: Double) -> Double {
     return (min(max(ratio, 1.0), 2.5) / 0.05).rounded() * 0.05
 }
 
-/// Every widget the bar knows, in their default order.
-let canonicalWidgetOrder = ["nowPlaying", "weather", "clock"]
+/// Every widget the bar knows, in their default order. A new widget goes on the end: an order saved
+/// before it existed gets it appended (below), so putting it anywhere else would give a fresh
+/// install and an upgraded one two different default orders.
+let canonicalWidgetOrder = ["nowPlaying", "weather", "clock", "calendar", "battery"]
 
 /// A saved widget order healed: each known widget once, where it first appears, then any missing
 /// ones in their default order, and nothing unknown. A stored order is only ever rewritten by
@@ -75,7 +77,17 @@ final class DockSettings {
     var hoverIntensity: Double { didSet { store.set(hoverIntensity, forKey: "hoverIntensity") } }
     /// Icons bounce while their app launches, as in the macOS Dock.
     var bouncesOnLaunch: Bool { didSet { store.set(bouncesOnLaunch, forKey: "bouncesOnLaunch") } }
+    /// A click on the app already in front hides it instead of bringing it forward again.
+    var clickHidesFrontmostApp: Bool {
+        didSet { store.set(clickHidesFrontmostApp, forKey: "clickHidesFrontmostApp") }
+    }
     var autoHides: Bool { didSet { store.set(autoHides, forKey: "autoHides") } }
+    /// With auto-hide on: hide only while another window reaches into the bar, and otherwise stay
+    /// shown. A second switch beside `autoHides` rather than turning it into a mode, so every saved
+    /// setting, settings file and "Turn Hiding On/Off" keeps its meaning with nothing to migrate.
+    var autoHidesOnlyWhenOverlapped: Bool {
+        didSet { store.set(autoHidesOnlyWhenOverlapped, forKey: "autoHidesOnlyWhenOverlapped") }
+    }
     /// How far from the screen edge, in points, the pointer counts as pushing against it.
     var revealSensitivity: Double { didSet { store.set(revealSensitivity, forKey: "revealSensitivity") } }
     /// Seconds the pointer must hold the edge before a hidden dock slides out.
@@ -99,6 +111,12 @@ final class DockSettings {
     var showsNowPlaying: Bool { didSet { store.set(showsNowPlaying, forKey: "showsNowPlaying") } }
     var showsWeather: Bool { didSet { store.set(showsWeather, forKey: "showsWeather") } }
     var showsClock: Bool { didSet { store.set(showsClock, forKey: "showsClock") } }
+    /// Synced like the rest, though a Mac with no battery never shows the tile — the setting then
+    /// just waits for a Mac that has one.
+    var showsBattery: Bool { didSet { store.set(showsBattery, forKey: "showsBattery") } }
+    /// Synced too. Turning it on in Settings is what asks for calendar access; a Mac that receives
+    /// it switched on by sync shows a tile to click for access instead of a prompt out of nowhere.
+    var showsCalendar: Bool { didSet { store.set(showsCalendar, forKey: "showsCalendar") } }
     /// The widgets' left-to-right order; only the enabled ones show.
     var widgetOrder: [String] { didSet { store.set(widgetOrder, forKey: "widgetOrder") } }
     /// Coordinates picked from a city search; 0,0 (an empty patch of the Gulf of Guinea) means
@@ -123,6 +141,11 @@ final class DockSettings {
     var displayMode: DisplayMode { didSet { store.set(displayMode.rawValue, forKey: "displayMode") } }
     /// The chosen screen's UUID when `displayMode` is `.specific`.
     var specificDisplay: String { didSet { store.set(specificDisplay, forKey: "specificDisplay") } }
+    /// With a dock on every display, each dock's previews show only the windows mostly on its own
+    /// screen. Per Mac: it means nothing without `displayMode`, which is.
+    var previewsShowOnlyThisDisplay: Bool {
+        didSet { store.set(previewsShowOnlyThisDisplay, forKey: "previewsShowOnlyThisDisplay") }
+    }
     var hidesSystemDock: Bool {
         didSet {
             store.set(hidesSystemDock, forKey: "hidesSystemDock")
@@ -133,8 +156,77 @@ final class DockSettings {
     var pinnedApps: [String] { didSet { store.set(pinnedApps, forKey: "pinnedApps") } }
     /// Folder paths shown as stacks beside the Trash.
     var stacks: [String] { didSet { store.set(stacks, forKey: "stacks") } }
+    /// Each stack's sort, by its path in `stacks`; a stack missing here sorts by Date Added. Beside
+    /// `stacks` rather than inside it, so that list, every settings file and every older DockIt
+    /// reading one keep the plain paths they always had. See `stackSort(for:)`.
+    var stackSorts: [String: String] { didSet { store.set(stackSorts, forKey: "stackSorts") } }
+    /// Each stack's display, Menu or Grid, kept the same way; a stack missing here opens as a menu.
+    /// See `stackDisplay(for:)`.
+    var stackDisplays: [String: String] { didSet { store.set(stackDisplays, forKey: "stackDisplays") } }
     /// App paths never shown in the dock, even while running — helpers and background tools.
     var hiddenApps: [String] { didSet { store.set(hiddenApps, forKey: "hiddenApps") } }
+    /// The macOS Dock's "Show suggested and recent apps": apps quit lately, after the running ones.
+    var showsRecentApps: Bool { didSet { store.set(showsRecentApps, forKey: "showsRecentApps") } }
+    /// App paths, most recently quit first — see `DockModel.recordingRecent`. Per Mac, unlike the
+    /// switch above: it is this Mac's history rather than a preference, the same app sits at a
+    /// different path (or nowhere) on another Mac, and it changes at every quit, which would
+    /// rewrite the iCloud file each time.
+    var recentApps: [String] { didSet { store.set(recentApps, forKey: "recentApps") } }
+
+    /// What each key reads before it is first set. A property here, not inline in `init`, so a test
+    /// can hold the keys against what sync carries.
+    static let registeredDefaults: [String: Any] = [
+        "edge": DockEdge.bottom.rawValue,
+        "iconSize": 48.0,
+        "iconPadding": 4.0,
+        "dockPadding": 6.0,
+        "magnifies": true,
+        "magnifyAmount": 1.35,
+        "magnifyReach": 2.0,
+        "magnifyOnApproach": false,
+        "smoothHover": true,
+        "hoverIntensity": 14.0,
+        "bouncesOnLaunch": true,
+        "clickHidesFrontmostApp": false,
+        "autoHides": false,
+        "autoHidesOnlyWhenOverlapped": false,
+        "revealSensitivity": 3.0,
+        "revealDelay": 0.0,
+        "hideDelay": 0.5,
+        "revealSpeed": 1.0,
+        "hideSpeed": 1.0,
+        "showsWindowPreviews": true,
+        "previewDelay": 0.5,
+        "previewShowsControls": true,
+        "livePreviews": true,
+        "showsMinimizedWindows": true,
+        "showsNowPlaying": false,
+        "showsWeather": false,
+        "showsClock": false,
+        "showsBattery": false,
+        "showsCalendar": false,
+        "widgetOrder": canonicalWidgetOrder,
+        "weatherLocation": "",
+        "weatherLatitude": 0.0,
+        "weatherLongitude": 0.0,
+        "weatherFahrenheit": true,
+        "clock24Hour": false,
+        "barTint": "",
+        "barTintIntensity": 20.0,
+        "barCornerRadius": 16.0,
+        "iconShadows": false,
+        "showsRunningDots": false,
+        "showsMenuBarIcon": true,
+        "syncsWithICloud": false,
+        "displayMode": DisplayMode.primary.rawValue,
+        "specificDisplay": "",
+        "previewsShowOnlyThisDisplay": false,
+        "hidesSystemDock": true,
+        "stackSorts": [String: String](),
+        "stackDisplays": [String: String](),
+        "showsRecentApps": false,
+        "recentApps": [String](),
+    ]
 
     private init() {
         // Migrated once from the old points-based setting, so an existing install keeps its size.
@@ -148,49 +240,7 @@ final class DockSettings {
                 store.set(amount, forKey: "magnifyAmount")
             }
         }
-        store.register(defaults: [
-            "edge": DockEdge.bottom.rawValue,
-            "iconSize": 48.0,
-            "iconPadding": 4.0,
-            "dockPadding": 6.0,
-            "magnifies": true,
-            "magnifyAmount": 1.35,
-            "magnifyReach": 2.0,
-            "magnifyOnApproach": false,
-            "smoothHover": true,
-            "hoverIntensity": 14.0,
-            "bouncesOnLaunch": true,
-            "autoHides": false,
-            "revealSensitivity": 3.0,
-            "revealDelay": 0.0,
-            "hideDelay": 0.5,
-            "revealSpeed": 1.0,
-            "hideSpeed": 1.0,
-            "showsWindowPreviews": true,
-            "previewDelay": 0.5,
-            "previewShowsControls": true,
-            "livePreviews": true,
-            "showsMinimizedWindows": true,
-            "showsNowPlaying": false,
-            "showsWeather": false,
-            "showsClock": false,
-            "widgetOrder": ["nowPlaying", "weather", "clock"],
-            "weatherLocation": "",
-            "weatherLatitude": 0.0,
-            "weatherLongitude": 0.0,
-            "weatherFahrenheit": true,
-            "clock24Hour": false,
-            "barTint": "",
-            "barTintIntensity": 20.0,
-            "barCornerRadius": 16.0,
-            "iconShadows": false,
-            "showsRunningDots": false,
-            "showsMenuBarIcon": true,
-            "syncsWithICloud": false,
-            "displayMode": DisplayMode.primary.rawValue,
-            "specificDisplay": "",
-            "hidesSystemDock": true,
-        ])
+        store.register(defaults: Self.registeredDefaults)
         edge = DockEdge(rawValue: store.string(forKey: "edge") ?? "") ?? .bottom
         iconSize = store.double(forKey: "iconSize")
         iconPadding = store.double(forKey: "iconPadding")
@@ -202,7 +252,9 @@ final class DockSettings {
         smoothHover = store.bool(forKey: "smoothHover")
         hoverIntensity = store.double(forKey: "hoverIntensity")
         bouncesOnLaunch = store.bool(forKey: "bouncesOnLaunch")
+        clickHidesFrontmostApp = store.bool(forKey: "clickHidesFrontmostApp")
         autoHides = store.bool(forKey: "autoHides")
+        autoHidesOnlyWhenOverlapped = store.bool(forKey: "autoHidesOnlyWhenOverlapped")
         revealSensitivity = store.double(forKey: "revealSensitivity")
         revealDelay = store.double(forKey: "revealDelay")
         hideDelay = store.double(forKey: "hideDelay")
@@ -216,6 +268,8 @@ final class DockSettings {
         showsNowPlaying = store.bool(forKey: "showsNowPlaying")
         showsWeather = store.bool(forKey: "showsWeather")
         showsClock = store.bool(forKey: "showsClock")
+        showsBattery = store.bool(forKey: "showsBattery")
+        showsCalendar = store.bool(forKey: "showsCalendar")
         widgetOrder = normalizedWidgetOrder(store.stringArray(forKey: "widgetOrder") ?? canonicalWidgetOrder)
         weatherLocation = store.string(forKey: "weatherLocation") ?? ""
         weatherLatitude = store.double(forKey: "weatherLatitude")
@@ -231,8 +285,13 @@ final class DockSettings {
         syncsWithICloud = store.bool(forKey: "syncsWithICloud")
         displayMode = DisplayMode(rawValue: store.string(forKey: "displayMode") ?? "") ?? .primary
         specificDisplay = store.string(forKey: "specificDisplay") ?? ""
+        previewsShowOnlyThisDisplay = store.bool(forKey: "previewsShowOnlyThisDisplay")
         hidesSystemDock = store.bool(forKey: "hidesSystemDock")
         hiddenApps = store.stringArray(forKey: "hiddenApps") ?? []
+        showsRecentApps = store.bool(forKey: "showsRecentApps")
+        recentApps = store.stringArray(forKey: "recentApps") ?? []
+        stackSorts = store.dictionary(forKey: "stackSorts") as? [String: String] ?? [:]
+        stackDisplays = store.dictionary(forKey: "stackDisplays") as? [String: String] ?? [:]
 
         // First launch starts from what the macOS Dock already holds, so switching loses nothing.
         // Written straight back so the seed is taken once, not re-read from a Dock DockIt has changed.

@@ -64,4 +64,32 @@ final class PortableSettingsTests: XCTestCase {
         let sane = PortableSettings(iconSize: 48, magnifyAmount: 1.35, revealDelay: 0.5)
         XCTAssertEqual(sane.clamped(), sane)
     }
+
+    /// Settings that deliberately stay on each Mac.
+    private static let perMacKeys: Set<String> = [
+        // Hiding the macOS Dock restarts it — not something one Mac should do to another.
+        "hidesSystemDock",
+        // The sync switch itself.
+        "syncsWithICloud",
+        // Display-shaped: which screen, and that screen's UUID, mean nothing on another Mac.
+        "displayMode", "specificDisplay",
+        // Only has an effect with a dock on every display, which is `displayMode`.
+        "previewsShowOnlyThisDisplay",
+        // This Mac's history of quit apps, by paths that differ between Macs; rewritten at every quit.
+        "recentApps",
+    ]
+
+    /// Every setting with a registered default either travels or is on the per-Mac list, so a new
+    /// setting added to Settings and forgotten in PortableSettings fails here instead of quietly
+    /// never syncing. Through the file format rather than by property names: a key counts as synced
+    /// only if a file carrying it under the defaults' exact name and type decodes it and writes it
+    /// back — a Codable name or type that drifted from the defaults key would not.
+    @MainActor
+    func testEveryDefaultIsSyncedOrPerMac() throws {
+        let defaults = DockSettings.registeredDefaults
+        let file = try JSONSerialization.data(withJSONObject: defaults)
+        let roundTripped = try PortableSettings.decoded(from: file).encoded()
+        let synced = try XCTUnwrap(JSONSerialization.jsonObject(with: roundTripped) as? [String: Any])
+        XCTAssertEqual(Set(defaults.keys).subtracting(synced.keys), Self.perMacKeys)
+    }
 }

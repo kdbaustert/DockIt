@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarItem: MenuBarItem?
     private var settingsSync: SettingsSync?
     private var watchdog: Timer?
+    /// Why the dock is out of sight, by the notification that said so. Paused while any is.
+    private var pauseReasons: Set<Notification.Name> = []
+    private var isPaused: Bool { !pauseReasons.isEmpty }
     /// Answers Sparkle's "which channels?" before each check. Held here because Sparkle keeps only
     /// a weak reference to its delegate.
     private let updateChannels = UpdateChannels()
@@ -36,6 +39,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = DockModel(settings: settings)
         self.model = model
         rebuildControllers()
+        // From the dock on the pointer's display, which is the one clicked; the first dock for a
+        // VoiceOver press with the pointer elsewhere. One grid at a time across every dock.
+        model.showStackGrid = { [weak self] item in
+            guard let controllers = self?.controllers,
+                  let target = controllers.first(where: { $0.ownsPointer }) ?? controllers.first
+            else { return false }
+            for controller in controllers where controller !== target { controller.closeStackGrid() }
+            target.toggleStackGrid(item)
+            return true
+        }
         // Both what decides which screens get a dock: the setting, and the screens themselves.
         observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.displayMode, settings.specificDisplay)
@@ -52,13 +65,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updater = SPUStandardUpdaterController(
                 startingUpdater: true, updaterDelegate: updateChannels, userDriverDelegate: nil)
         }
-        menuBarItem = MenuBarItem(settings: settings, updater: updater)
+        menuBarItem = MenuBarItem(settings: settings, model: model, updater: updater)
         settingsSync = SettingsSync(settings: settings)
         if settings.hidesSystemDock { SystemDock.hide() }
-        // The Dock's preferences are not DockIt's to keep. Something else rewrote them within an hour
-        // of the first install — the delay vanished and the Dock slid up at the screen edge again —
-        // so hiding once at launch is not enough. The check is two preference reads; the Dock is
-        // only touched when they are wrong.
+        startWatchdog()
+        observeSleep()
+    }
+
+    /// The Dock's preferences are not DockIt's to keep. Something else rewrote them within an hour
+    /// of the first install — the delay vanished and the Dock slid up at the screen edge again —
+    /// so hiding once at launch is not enough. The check is two preference reads; the Dock is
+    /// only touched when they are wrong.
+    private func startWatchdog() {
         let watchdog = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 if self?.settings.hidesSystemDock == true { SystemDock.hide() }
@@ -67,6 +85,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdog.tolerance = 1
         RunLoop.main.add(watchdog, forMode: .common)
         self.watchdog = watchdog
+    }
+
+    /// With the display asleep, or another user's session in front after a fast user switch, no one
+    /// can see the dock, and every timer DockIt has went on waking the Mac for it all night: the
+    /// pointer poll, the model's two-second beat and the watchdog. Each pair's second notification
+    /// undoes its first; the two can overlap — a display that sleeps behind a switched-away session
+    /// — so the dock wakes only when neither holds.
+    private func observeSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        let pairs: [(pause: Notification.Name, resume: Notification.Name)] = [
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification),
+        ]
+        for (pause, resume) in pairs {
+            center.addObserver(forName: pause, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setPaused(true, because: pause) }
+            }
+            center.addObserver(forName: resume, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setPaused(false, because: pause) }
+            }
+        }
+    }
+
+    private func setPaused(_ paused: Bool, because reason: Notification.Name) {
+        let wasPaused = isPaused
+        if paused { pauseReasons.insert(reason) } else { pauseReasons.remove(reason) }
+        guard isPaused != wasPaused else { return }
+        model?.setPaused(isPaused)
+        for controller in controllers { controller.setPaused(isPaused) }
+        if isPaused {
+            watchdog?.invalidate()
+            watchdog = nil
+        } else {
+            // Whatever rewrote the Dock's preferences may have done it while the dock slept.
+            if settings.hidesSystemDock { SystemDock.hide() }
+            startWatchdog()
+        }
     }
 
     /// One dock per screen the display mode names. Rebuilt whole on any change: controllers are
@@ -86,6 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .followPointer, .primary: [first]
         }
         controllers = targets.map { DockController(model: model, settings: settings, screen: $0) }
+        // Displays come and go around sleep; a dock built while paused starts paused.
+        if isPaused {
+            for controller in controllers { controller.setPaused(true) }
+        }
     }
 
     /// Opening DockIt again while it runs — Finder, Spotlight, Launchpad — shows Settings: with no

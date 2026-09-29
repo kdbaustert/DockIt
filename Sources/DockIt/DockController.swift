@@ -17,6 +17,10 @@ final class DockController {
     let state = PanelState()
     private let panel = DockPanel()
     private let previews: PreviewController
+    private let grid = StackGridController()
+    /// The item under the pointer at the last tick, for the grid: a click on its own stack's icon
+    /// must reach the icon rather than close the grid on the way.
+    private var hoveredItemID: String?
     /// The display this dock is anchored to, by id: an NSScreen instance goes stale across
     /// configuration changes, an id names the display for as long as it is attached.
     private var displayID: CGDirectDisplayID
@@ -26,8 +30,20 @@ final class DockController {
     private var edgeHeldAt: Date?
     private var openMenus = 0
     /// Kept so tearDown can remove them: block observers outlive their controller otherwise, and
-    /// every display change would leave three more behind.
+    /// every display change would leave two more behind.
     private var observers: [NSObjectProtocol] = []
+    /// The event monitors that stand in for the timer while the pointer rests away from the edge.
+    private var monitors: [Any] = []
+    private var lastMouse: NSPoint?
+    private var stillTicks = 0
+    /// Display asleep or another user's session in front: nothing to see, so nothing runs.
+    private var isPaused = false
+    /// Whether another app's window reaches into the resting bar, as last checked; only consulted
+    /// with "only when a window overlaps" on. See `refreshOverlap`.
+    private var isOverlapped = false
+    private var overlapTimer: Timer?
+    /// On NSWorkspace's own centre, so kept apart from `observers` for removal.
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     /// Nil while no screen is attached at all — display sleep or an unplug on a headless-capable Mac
     /// empties the list, and indexing it then would trap.
@@ -49,10 +65,20 @@ final class DockController {
         layoutPanel()
         panel.orderFrontRegardless()
 
+        grid.keepsOpen = { [weak self] event in
+            guard let self else { return false }
+            return event.type == .leftMouseDown && event.window === panel && hoveredItemID == grid.itemID
+        }
+        // The grid keeps the dock up without ticks (see `canIdle`), so an idle poll has to be woken
+        // for the hide countdown to start once it is gone. Only an idle one: restarting a running
+        // poll would drop it to the slow rate under a pointer that is on the bar.
+        grid.onClose = { [weak self] in
+            if self?.timer == nil { self?.setPolling(fast: false) }
+        }
+
+        // No observer for screen changes: AppDelegate replaces every controller on one, and a layout
+        // here first was work thrown away a moment later.
         let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.layoutPanel() }
-        })
         // An open context menu or stack keeps the dock up even though the pointer has left the bar,
         // and takes the preview down: the two would otherwise sit on top of each other.
         observers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
@@ -64,16 +90,33 @@ final class DockController {
         observers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openMenus = max((self?.openMenus ?? 1) - 1, 0) }
         })
+        // A window comes to the front or goes with its app, or a whole Desktop's worth changes: the
+        // moments a window is most likely to have arrived on the bar or left it. Screen changes need
+        // nothing here — they rebuild every controller, and a new one checks as it starts.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
+            workspaceObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshOverlap() }
+            })
+        }
         trackSettings()
         setPolling(fast: false)
+        updateOverlapWatch()
     }
 
     /// Ordered out and stopped; the delegate replaces controllers when the display setup changes.
     func tearDown() {
+        // First: closing wakes the poll, which the lines below then stop.
+        grid.close()
         timer?.invalidate()
         timer = nil
+        overlapTimer?.invalidate()
+        overlapTimer = nil
+        disarmMonitors()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        workspaceObservers = []
         previews.hide()
         panel.orderOut(nil)
     }
@@ -81,10 +124,60 @@ final class DockController {
     private func trackSettings() {
         observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.edge, settings.iconSize, settings.iconPadding, settings.dockPadding,
-                 settings.magnifies, settings.magnifyAmount, settings.autoHides)
+                 settings.magnifies, settings.magnifyAmount, settings.autoHides,
+                 settings.autoHidesOnlyWhenOverlapped)
         } onChange: { [weak self] in
             self?.layoutPanel()
+            // Before the wake below, so the tick it causes decides on this layout's overlap.
+            self?.updateOverlapWatch()
+            // Turning on auto-hide must hide a dock the pointer is resting away from.
+            self?.setPolling(fast: false)
         }
+    }
+
+    /// Stopped outright while nobody can see the dock; see AppDelegate.
+    func setPaused(_ paused: Bool) {
+        guard paused != isPaused else { return }
+        isPaused = paused
+        if paused {
+            timer?.invalidate()
+            timer = nil
+            disarmMonitors()
+            previews.hide()
+            grid.close()
+        } else {
+            setPolling(fast: false)
+        }
+        updateOverlapWatch()
+    }
+
+    /// Whether the pointer is on this dock's display — the dock a click on a stack came from.
+    var ownsPointer: Bool {
+        screen.map { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? false
+    }
+
+    /// A Grid stack's click: its grid over the icon, or, when that grid is already up, closed — a
+    /// second click on a stack closes it, as in the macOS Dock. The anchor is worked out here from
+    /// the layout the ticks read, rather than kept from the last tick: a VoiceOver press has no
+    /// pointer on the icon to have been ticked.
+    func toggleStackGrid(_ item: DockItem) {
+        if grid.itemID == item.id {
+            grid.close()
+            return
+        }
+        guard let url = item.url, let index = model.items.firstIndex(where: { $0.id == item.id }) else { return }
+        let layout = model.layout(for: state)
+        previews.hide()
+        let anchor = DockAnchor(
+            center: layout.center(of: index), dockFrame: panel.frame, edge: settings.edge,
+            barReach: barReach(layout))
+        grid.show(
+            item.id, folder: url, sort: settings.stackSort(for: url.path), at: anchor,
+            within: screen?.visibleFrame)
+    }
+
+    func closeStackGrid() {
+        grid.close()
     }
 
     private func layoutPanel() {
@@ -112,9 +205,11 @@ final class DockController {
     /// is over DockIt's own panel, a local one needs the panel to be key (it never is), and neither
     /// reliably reports a Finder drag in progress. Reading the location is cheap. Near the edge it
     /// runs at the display's refresh rate (120 Hz on ProMotion) so magnification keeps up with the
-    /// pointer; the rate drops to 10 Hz whenever the pointer is away from the edge.
+    /// pointer; the rate drops to 10 Hz whenever the pointer is away from the edge, and to nothing
+    /// once it has rested there a second — see `canIdle`.
     private func setPolling(fast: Bool) {
-        guard timer == nil || fast != isPollingFast else { return }
+        guard !isPaused, timer == nil || fast != isPollingFast else { return }
+        disarmMonitors()
         timer?.invalidate()
         isPollingFast = fast
         // This dock's own display: with a ProMotion laptop beside a 60 Hz monitor, the first screen's
@@ -131,7 +226,8 @@ final class DockController {
 
     private func tick() {
         // No screen attached: nothing to lay out against; the next display change rebuilds anyway.
-        guard screen != nil else { return }
+        // Resolved once: `screen` searches every attached display, and this runs up to 120 times a second.
+        guard let screen = self.screen else { return }
         let mouse = NSEvent.mouseLocation
         // Follow the pointer: when it crosses onto another screen, the dock goes with it.
         if settings.displayMode == .followPointer,
@@ -139,7 +235,9 @@ final class DockController {
             under.displayID != displayID {
             displayID = under.displayID
             previews.hide()
+            grid.close()
             layoutPanel()
+            return
         }
         let frame = panel.frame
         let (along, across) = switch settings.edge {
@@ -150,8 +248,7 @@ final class DockController {
         let layout = model.layout(for: state)
         let metrics = layout.metrics
         let onEdge = along >= 0 && along <= state.stripLength && across >= -1
-        // Once magnified, the grown icons are part of the bar; before that, only the resting bar is.
-        let reach = state.pointer == nil ? metrics.thickness : layout.depth + metrics.padding
+        let reach = barReach(layout)
         let overBar = onEdge && !state.isHidden
             && along >= layout.start && along <= layout.start + layout.length && across <= reach
 
@@ -162,9 +259,11 @@ final class DockController {
 
         let hoveredIndex = overBar ? layout.index(at: along) : nil
         let hoveredItem = hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
+        hoveredItemID = hoveredItem?.id
         // The pointer still rests on the icon while its menu is open; without this the dwell runs
-        // out under the menu and the preview comes straight back.
-        if openMenus == 0 {
+        // out under the menu and the preview comes straight back. A stack's grid stands where the
+        // preview would, so the same goes for it.
+        if openMenus == 0, !grid.isShown {
             previews.update(
                 hovered: hoveredItem, center: hoveredIndex.map(layout.center(of:)), mouse: mouse,
                 dockFrame: frame, edge: settings.edge, barReach: reach, isDockHidden: state.isHidden,
@@ -173,8 +272,11 @@ final class DockController {
 
         // Approaching: near the bar but not on it yet. The gain ramps the growth in over the last
         // stretch of travel, so the bar swells to meet the pointer instead of jumping when it lands.
+        // Not from inside a stack's grid, which sits in the approach zone: the bar would swell and the
+        // poll run at display rate under a pointer that is using the grid, resting there or not.
+        let inGrid = grid.contains(mouse)
         let approaching = settings.magnifyOnApproach && settings.magnifies && onEdge && !state.isHidden
-            && alongBar && !overBar && across <= reach * 3
+            && alongBar && !overBar && !inGrid && across <= reach * 3
         let pointer = (overBar || approaching) ? along : nil
         state.gain = overBar || !approaching ? 1 : max(0, 1 - (across - reach) / (reach * 2))
         if pointer != state.pointer {
@@ -197,11 +299,74 @@ final class DockController {
         if panel.ignoresMouseEvents == overBar { panel.ignoresMouseEvents = !overBar }
 
         let nearZone = state.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
-        setPolling(fast: onEdge && across < nearZone)
+        let fast = onEdge && across < nearZone && !inGrid
+        if mouse == lastMouse { stillTicks += 1 } else { stillTicks = 0 }
+        lastMouse = mouse
+        if !fast, canIdle() {
+            goIdle()
+        } else {
+            setPolling(fast: fast)
+        }
+    }
+
+    // MARK: - Idle
+
+    /// About a second at the slow rate with the pointer where it was.
+    private static let idleAfterStillTicks = 10
+
+    /// Whether nothing is left for a tick to do until the pointer moves. At rest away from the edge
+    /// the 10 Hz poll was two thirds of DockIt's idle wakeups (about 10 of 15 a second), each one
+    /// reading a pointer that had not moved. Not while a button is down — a Finder drag may be
+    /// under way, and the poll is what notices it reaching the bar — nor while a hide, a reveal, a
+    /// menu or a preview is still counting down on the ticks. A stack's grid is not on the list: it
+    /// keeps the dock up by holding `leftBarAt` off, which needs no tick, and wakes the poll as it
+    /// closes.
+    private func canIdle() -> Bool {
+        stillTicks >= Self.idleAfterStillTicks && NSEvent.pressedMouseButtons == 0
+            && leftBarAt == nil && edgeHeldAt == nil && openMenus == 0 && !previews.isActive
+            && state.pointer == nil
+    }
+
+    /// The timer stops and the first mouse event of any kind starts it again. The monitors are
+    /// removed as soon as one fires, so a moving pointer costs the 10 Hz poll, not an event per
+    /// move. Global for other apps' events; local for DockIt's own windows — Settings — which a
+    /// global monitor never sees. The objection to monitors above is about the pointer over the
+    /// panel, and at rest the panel ignores the mouse, so events go to whatever is beneath it.
+    private func goIdle() {
+        timer?.invalidate()
+        timer = nil
+        stillTicks = 0
+        guard monitors.isEmpty else { return }
+        let mask: NSEvent.EventTypeMask = [
+            .mouseMoved, .leftMouseDown, .leftMouseDragged, .rightMouseDown, .rightMouseDragged,
+            .otherMouseDown, .otherMouseDragged, .scrollWheel,
+        ]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.setPolling(fast: false) }
+        }) {
+            monitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.setPolling(fast: false) }
+            return event
+        }) {
+            monitors.append(local)
+        }
+    }
+
+    private func disarmMonitors() {
+        for monitor in monitors { NSEvent.removeMonitor(monitor) }
+        monitors = []
+    }
+
+    /// Auto-hide in force right now. With "only when a window overlaps", a dock nothing overlaps
+    /// behaves exactly as with auto-hide off, and an overlapped one exactly as with it on.
+    private var autoHidesNow: Bool {
+        settings.autoHides && (!settings.autoHidesOnlyWhenOverlapped || isOverlapped)
     }
 
     private func updateAutoHide(onEdge: Bool, across: CGFloat, overBar: Bool) {
-        guard settings.autoHides else {
+        guard autoHidesNow else {
             if state.isHidden { setHidden(false) }
             return
         }
@@ -216,13 +381,23 @@ final class DockController {
             } else {
                 edgeHeldAt = nil
             }
-        } else if overBar || openMenus > 0 || previews.keepsDockShown {
+        } else if overBar || openMenus > 0 || previews.keepsDockShown || grid.isShown {
             leftBarAt = nil
         } else if let left = leftBarAt {
-            if Date().timeIntervalSince(left) > settings.hideDelay { setHidden(true) }
+            guard Date().timeIntervalSince(left) > settings.hideDelay else { return }
+            // Once per hide, not per tick: the last check can be two seconds old, and hiding for a
+            // window that has since moved off the bar would only bring the dock straight back.
+            refreshOverlap()
+            if autoHidesNow { setHidden(true) } else { leftBarAt = nil }
         } else {
             leftBarAt = Date()
         }
+    }
+
+    /// How far the bar reaches off the edge. Once magnified, the grown icons are part of the bar;
+    /// before that, only the resting bar is.
+    private func barReach(_ layout: DockLayout) -> CGFloat {
+        state.pointer == nil ? layout.metrics.thickness : layout.depth + layout.metrics.padding
     }
 
     private func setHidden(_ hidden: Bool) {
@@ -231,6 +406,86 @@ final class DockController {
         // The speed settings are multipliers on the stock quarter-second-ish slide.
         let speed = max(hidden ? settings.hideSpeed : settings.revealSpeed, 0.1)
         withAnimation(.easeInOut(duration: 0.2 / speed)) { state.isHidden = hidden }
+    }
+
+    // MARK: - Overlap
+
+    private var watchesOverlap: Bool {
+        settings.autoHides && settings.autoHidesOnlyWhenOverlapped && !isPaused
+    }
+
+    /// The events above miss a window dragged or resized onto the bar while its app stays in front,
+    /// so a slow beat re-checks behind them — only with the mode on and the display awake. Nothing
+    /// rides on the pointer ticks: they run at display rate, and a window moving needs no such
+    /// speed. Reading the on-screen window list took 0.24 ms with five windows up (measured, averaged
+    /// over 200 reads).
+    private func updateOverlapWatch() {
+        guard watchesOverlap else {
+            overlapTimer?.invalidate()
+            overlapTimer = nil
+            return
+        }
+        if overlapTimer == nil {
+            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshOverlap() }
+            }
+            // Generous, so the wakeup can fold into the model's two-second beat or the watchdog's.
+            timer.tolerance = 1
+            RunLoop.main.add(timer, forMode: .common)
+            overlapTimer = timer
+        }
+        refreshOverlap()
+    }
+
+    /// Re-reads the on-screen windows. A change wakes the pointer poll if it had gone idle — its
+    /// next tick hides or reveals through `updateAutoHide`, with the usual hide delay; a running
+    /// poll picks the change up on its own.
+    private func refreshOverlap() {
+        guard watchesOverlap, let bar = restingBarFrame() else { return }
+        let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let overlapped = Self.windowOverlaps(bar, windows: windows, ownPID: ProcessInfo.processInfo.processIdentifier)
+        guard overlapped != isOverlapped else { return }
+        isOverlapped = overlapped
+        if timer == nil { setPolling(fast: false) }
+    }
+
+    /// The bar at rest, in the window server's coordinates — origin at the primary display's top
+    /// left, y down — which is what window bounds come in. Nil while magnified: the layout then
+    /// describes the grown bar, and with the pointer on it the dock stays up whatever overlaps.
+    private func restingBarFrame() -> CGRect? {
+        guard state.pointer == nil, let primary = NSScreen.screens.first else { return nil }
+        let layout = model.layout(for: state)
+        let thickness = layout.metrics.thickness
+        let frame = panel.frame
+        let bar = switch settings.edge {
+        case .bottom:
+            NSRect(x: frame.minX + layout.start, y: frame.minY, width: layout.length, height: thickness)
+        case .left:
+            NSRect(x: frame.minX, y: frame.maxY - layout.start - layout.length, width: thickness, height: layout.length)
+        case .right:
+            NSRect(x: frame.maxX - thickness, y: frame.maxY - layout.start - layout.length,
+                   width: thickness, height: layout.length)
+        }
+        return CGRect(x: bar.minX, y: primary.frame.maxY - bar.maxY, width: bar.width, height: bar.height)
+    }
+
+    /// Whether another app's window reaches into `bar`; both in window-server coordinates, the
+    /// windows as `CGWindowListCopyWindowInfo` describes them. Bounds need no Screen Recording, only
+    /// names and titles do. Layer 0 only: the menu bar, status items, the Dock, and the desktop and
+    /// its icons all sit on other layers. DockIt's own windows never count — Settings is layer 0.
+    /// Nor does a fully transparent window, which no one can see, or one that only touches the bar.
+    nonisolated static func windowOverlaps(_ bar: CGRect, windows: [[String: Any]], ownPID: pid_t) -> Bool {
+        windows.contains { info in
+            guard info[kCGWindowLayer as String] as? Int == 0,
+                  let pid = info[kCGWindowOwnerPID as String] as? Int, pid != Int(ownPID),
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let bounds = (info[kCGWindowBounds as String] as? NSDictionary)
+                      .flatMap({ CGRect(dictionaryRepresentation: $0) })
+            else { return false }
+            let overlap = bar.intersection(bounds)
+            return !overlap.isNull && overlap.width >= 1 && overlap.height >= 1
+        }
     }
 }
 

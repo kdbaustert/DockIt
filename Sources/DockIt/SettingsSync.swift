@@ -3,8 +3,9 @@ import AppKit
 /// The settings that travel between Macs — in an exported file and over iCloud. Everything is
 /// optional so a file from an older or newer DockIt still applies whatever it does carry.
 ///
-/// Two settings deliberately stay on each Mac: hiding the macOS Dock, whose change restarts that
-/// Mac's Dock (not something one Mac should do to another), and the sync switch itself.
+/// Some settings deliberately stay on each Mac: hiding the macOS Dock, whose change restarts that
+/// Mac's Dock (not something one Mac should do to another), the sync switch itself, and everything
+/// display-shaped — which screen the dock is on, and what only means something given that.
 struct PortableSettings: Codable, Equatable {
     var edge: String?
     var iconSize: Double?
@@ -19,7 +20,9 @@ struct PortableSettings: Codable, Equatable {
     var smoothHover: Bool?
     var hoverIntensity: Double?
     var bouncesOnLaunch: Bool?
+    var clickHidesFrontmostApp: Bool?
     var autoHides: Bool?
+    var autoHidesOnlyWhenOverlapped: Bool?
     var revealSensitivity: Double?
     var revealDelay: Double?
     var hideDelay: Double?
@@ -33,6 +36,8 @@ struct PortableSettings: Codable, Equatable {
     var showsNowPlaying: Bool?
     var showsWeather: Bool?
     var showsClock: Bool?
+    var showsBattery: Bool?
+    var showsCalendar: Bool?
     var widgetOrder: [String]?
     var weatherLocation: String?
     var weatherLatitude: Double?
@@ -47,7 +52,13 @@ struct PortableSettings: Codable, Equatable {
     var showsMenuBarIcon: Bool?
     var pinnedApps: [String]?
     var stacks: [String]?
+    /// Travels with `stacks`: the paths it is keyed by are the ones that list carries.
+    var stackSorts: [String: String]?
+    /// Keyed the same way, for the same reason.
+    var stackDisplays: [String: String]?
     var hiddenApps: [String]?
+    /// The switch only. The list it shows stays on each Mac; see `DockSettings.recentApps`.
+    var showsRecentApps: Bool?
 
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
@@ -94,20 +105,23 @@ extension DockSettings {
             edge: edge.rawValue, iconSize: iconSize, iconPadding: iconPadding, dockPadding: dockPadding,
             magnifies: magnifies, magnifyAmount: magnifyAmount, magnifyReach: magnifyReach,
             magnifyOnApproach: magnifyOnApproach, smoothHover: smoothHover,
-            hoverIntensity: hoverIntensity, bouncesOnLaunch: bouncesOnLaunch, autoHides: autoHides,
+            hoverIntensity: hoverIntensity, bouncesOnLaunch: bouncesOnLaunch,
+            clickHidesFrontmostApp: clickHidesFrontmostApp, autoHides: autoHides,
+            autoHidesOnlyWhenOverlapped: autoHidesOnlyWhenOverlapped,
             revealSensitivity: revealSensitivity, revealDelay: revealDelay, hideDelay: hideDelay,
             revealSpeed: revealSpeed, hideSpeed: hideSpeed,
             showsWindowPreviews: showsWindowPreviews, previewDelay: previewDelay,
             previewShowsControls: previewShowsControls,
             livePreviews: livePreviews, showsMinimizedWindows: showsMinimizedWindows,
             showsNowPlaying: showsNowPlaying, showsWeather: showsWeather, showsClock: showsClock,
-            widgetOrder: widgetOrder, weatherLocation: weatherLocation,
+            showsBattery: showsBattery, showsCalendar: showsCalendar, widgetOrder: widgetOrder, weatherLocation: weatherLocation,
             weatherLatitude: weatherLatitude, weatherLongitude: weatherLongitude,
             weatherFahrenheit: weatherFahrenheit,
             clock24Hour: clock24Hour, barTint: barTint, barTintIntensity: barTintIntensity,
             barCornerRadius: barCornerRadius, iconShadows: iconShadows,
             showsRunningDots: showsRunningDots,
-            showsMenuBarIcon: showsMenuBarIcon, pinnedApps: pinnedApps, stacks: stacks, hiddenApps: hiddenApps
+            showsMenuBarIcon: showsMenuBarIcon, pinnedApps: pinnedApps, stacks: stacks, stackSorts: stackSorts,
+            stackDisplays: stackDisplays, hiddenApps: hiddenApps, showsRecentApps: showsRecentApps
         )
     }
 
@@ -131,7 +145,9 @@ extension DockSettings {
         if let v = p.smoothHover, v != smoothHover { smoothHover = v }
         if let v = p.hoverIntensity, v != hoverIntensity { hoverIntensity = v }
         if let v = p.bouncesOnLaunch, v != bouncesOnLaunch { bouncesOnLaunch = v }
+        if let v = p.clickHidesFrontmostApp, v != clickHidesFrontmostApp { clickHidesFrontmostApp = v }
         if let v = p.autoHides, v != autoHides { autoHides = v }
+        if let v = p.autoHidesOnlyWhenOverlapped, v != autoHidesOnlyWhenOverlapped { autoHidesOnlyWhenOverlapped = v }
         if let v = p.revealSensitivity, v != revealSensitivity { revealSensitivity = v }
         if let v = p.revealDelay, v != revealDelay { revealDelay = v }
         if let v = p.hideDelay, v != hideDelay { hideDelay = v }
@@ -145,6 +161,8 @@ extension DockSettings {
         if let v = p.showsNowPlaying, v != showsNowPlaying { showsNowPlaying = v }
         if let v = p.showsWeather, v != showsWeather { showsWeather = v }
         if let v = p.showsClock, v != showsClock { showsClock = v }
+        if let v = p.showsBattery, v != showsBattery { showsBattery = v }
+        if let v = p.showsCalendar, v != showsCalendar { showsCalendar = v }
         if let v = p.widgetOrder, v != widgetOrder { widgetOrder = v }
         if let v = p.weatherLocation, v != weatherLocation { weatherLocation = v }
         if let v = p.weatherLatitude, v != weatherLatitude { weatherLatitude = v }
@@ -159,7 +177,10 @@ extension DockSettings {
         if let v = p.showsMenuBarIcon, v != showsMenuBarIcon { showsMenuBarIcon = v }
         if let v = p.pinnedApps, v != pinnedApps { pinnedApps = v }
         if let v = p.stacks, v != stacks { stacks = v }
+        if let v = p.stackSorts, v != stackSorts { stackSorts = v }
+        if let v = p.stackDisplays, v != stackDisplays { stackDisplays = v }
         if let v = p.hiddenApps, v != hiddenApps { hiddenApps = v }
+        if let v = p.showsRecentApps, v != showsRecentApps { showsRecentApps = v }
     }
 }
 
@@ -244,15 +265,25 @@ final class SettingsSync {
     init(settings: DockSettings) {
         self.settings = settings
         Self.current = self
-        observeContinuously(ownedBy: self) { [weak self] in
-            guard let self else { return }
-            settings.syncsWithICloud && Self.isAvailable ? start() : stop()
-        } onChange: {}
+        // Only the switch is read under tracking. Starting inside `read` made everything it touched
+        // a dependency — `apply` reads every portable setting, the first write encodes them all — so
+        // an unrelated change re-ran start or stop. `onChange` runs on a later main-actor turn, after
+        // the switch's didSet, so it sees the new value.
+        observeContinuously(ownedBy: self) { [settings] in
+            _ = settings.syncsWithICloud
+        } onChange: { [weak self] in
+            self?.followSwitch()
+        }
+        followSwitch()
         observeContinuously(ownedBy: self) { [settings] in
             _ = settings.portable
         } onChange: { [weak self] in
             self?.scheduleWrite()
         }
+    }
+
+    private func followSwitch() {
+        settings.syncsWithICloud && Self.isAvailable ? start() : stop()
     }
 
     private func start() {

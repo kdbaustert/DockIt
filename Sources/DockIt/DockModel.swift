@@ -1,10 +1,11 @@
 import AppKit
 import Observation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct DockItem: Identifiable, Equatable, Sendable {
-    enum Kind: Sendable { case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock }
+    enum Kind: Sendable {
+        case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock, battery, calendar
+    }
 
     let id: String
     let kind: Kind
@@ -15,6 +16,8 @@ struct DockItem: Identifiable, Equatable, Sendable {
     let pid: pid_t?
     /// The window a `.minimizedWindow` tile stands for.
     var windowID: CGWindowID?
+    /// And the app that window belongs to, for VoiceOver — looked up once per rebuild, not per render.
+    var appName: String?
 
     /// How much of the bar the item takes. The widget widths are fixed points: their content is
     /// text, which does not scale with the icons.
@@ -27,6 +30,8 @@ struct DockItem: Identifiable, Equatable, Sendable {
         case .nowPlaying: .fixed(180)
         case .weather: .fixed(128)
         case .clock: .fixed(84)
+        case .battery: .fixed(84)
+        case .calendar: .fixed(156)
         }
     }
 }
@@ -45,30 +50,45 @@ struct MinimizedWindow: Equatable, Sendable {
     var identity: Identity { Identity(id: id, pid: pid) }
 }
 
-/// The payload an icon carries while dragged inside the dock: the app's path under a type only DockIt
-/// knows. Not the app's file URL, which dropped on Finder would copy or alias the app, and not plain
-/// text, which Finder drops on the desktop as a text clipping.
-private let dragType = UTType(exportedAs: "dev.kennyb.dockit.item")
+/// A running app's windows, as its context menu lists them.
+struct MenuWindows: Equatable, Sendable {
+    struct Window: Equatable, Sendable {
+        let id: CGWindowID
+        let title: String
+    }
+
+    let pid: pid_t
+    let windows: [Window]
+}
 
 @MainActor
 @Observable
 final class DockModel {
     nonisolated static let finderPath = "/System/Library/CoreServices/Finder.app"
     nonisolated static let finderID = key(URL(fileURLWithPath: finderPath))
-    static let dropTypes: [UTType] = [.fileURL, dragType]
 
     private(set) var items: [DockItem] = []
     private(set) var trashIsFull = false
+    // The sweeps' results, and their in-flight flags below, are not `private`: the sweeps that set
+    // them live in DockModel+Sweeps.swift, and Swift has no access level for "this type, any file".
     /// Windows currently in the Dock's sense of minimized — tiles between the separator and Trash.
-    private(set) var minimizedWindows: [MinimizedWindow] = []
+    var minimizedWindows: [MinimizedWindow] = []
     /// Their thumbnails, tracked so the tile redraws when a late capture lands.
-    private(set) var minimizedThumbs: [CGWindowID: NSImage] = [:]
+    var minimizedThumbs: [CGWindowID: NSImage] = [:]
     /// Item ids of apps between starting to launch and finishing — their icons bounce.
     private(set) var launching: Set<String> = []
     /// Each app's badge — an unread count, usually — by item id.
-    private(set) var badges: [String: String] = [:]
+    var badges: [String: String] = [:]
+    /// The windows the last-opened app context menu asked for. One app's at a time: only one menu
+    /// is ever open. See `requestMenuWindows` in DockModel+Sweeps.swift.
+    var menuWindows: MenuWindows?
+    @ObservationIgnored var menuWindowsAsked: (pid: pid_t, at: Date)?
 
     @ObservationIgnored let settings: DockSettings
+    /// Opens a Grid stack's grid from the dock it was clicked on, answering whether one did. Set by
+    /// the app delegate, which holds the docks: the model sees the click, and only a dock knows where
+    /// the icon is.
+    @ObservationIgnored var showStackGrid: ((DockItem) -> Bool)?
     @ObservationIgnored private var icons: [String: NSImage] = [:]
 
     /// The longest an icon bounces. An app that never reports finishing its launch — one that hangs,
@@ -78,21 +98,17 @@ final class DockModel {
     /// end of a whole cycle: stopping mid-flight would drop the icon back onto the bar in one frame.
     /// That also means a launch always shows at least one bounce — measured, TextEdit reports
     /// finishing 50 ms after starting, which cut the bounce off before a frame of it was drawn.
-    private static let bounceCycle: TimeInterval = 0.6
+    private nonisolated static let bounceCycle: TimeInterval = 0.6
     @ObservationIgnored private var launchStarts: [String: Date] = [:]
     @ObservationIgnored private var runningObservation: NSKeyValueObservation?
     /// What the running apps looked like at the last rebuild; see the maintenance timer.
     @ObservationIgnored private var lastRunningSignature: [pid_t: Int] = [:]
     /// Counts the maintenance timer's beats, for the minimized windows' periodic full sweep.
     @ObservationIgnored private var maintenanceBeats = 0
-    /// Whether the Accessibility prompt has been shown in this run.
-    private static var hasPromptedForAccessibility = false
-    /// The minimized-window and badge sweeps, off the main thread: each app that does not answer
-    /// costs its 0.3 s timeout, and on the main thread that froze magnification and clicks with it.
-    /// Serial, so the two sweeps never ask at once.
-    private static let axQueue = DispatchQueue(label: "dev.kennyb.dockit.ax", qos: .utility)
-    @ObservationIgnored private var isSweepingMinimized = false
-    @ObservationIgnored private var isSweepingBadges = false
+    @ObservationIgnored var isSweepingMinimized = false
+    @ObservationIgnored var isSweepingBadges = false
+    @ObservationIgnored private var maintenanceTimer: Timer?
+    @ObservationIgnored private var isRebuildPending = false
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -106,15 +122,18 @@ final class DockModel {
                 if let url { self?.startedLaunching(url) }
                 // An app that is not pinned has no icon until it is in the running list, so it
                 // gets one now to bounce, rather than appearing only once it has finished.
-                self?.rebuild()
+                self?.scheduleRebuild()
             }
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 let url = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleURL
                 MainActor.assumeIsolated {
-                    if let url { self?.finishedLaunching(url) }
-                    self?.rebuild()
+                    if let url {
+                        self?.finishedLaunching(url)
+                        if name == NSWorkspace.didTerminateApplicationNotification { self?.recordQuit(url) }
+                    }
+                    self?.scheduleRebuild()
                 }
             }
         }
@@ -125,7 +144,7 @@ final class DockModel {
         // change are caught by the timer below instead.
         runningObservation = NSWorkspace.shared.observe(\.runningApplications) {
             @Sendable [weak self] _, _ in
-            Task { @MainActor in self?.rebuild() }
+            Task { @MainActor in self?.scheduleRebuild() }
         }
         rebuild()
         refreshTrash()
@@ -133,29 +152,61 @@ final class DockModel {
         // Minimized windows: a full sweep whenever the frontmost app changes, and on the timer below
         // the frontmost app each beat and every app each 15th (30 s). Asking every app each beat was a
         // round trip per app every two seconds, and it is almost always the frontmost app that
-        // minimizes or restores.
+        // minimizes or restores. Badges too: switching to an app is usually reading what its badge
+        // counted, and the count should clear then, not at the next slow sweep.
         center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
             [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshMinimizedWindows() }
+            MainActor.assumeIsolated {
+                self?.refreshMinimizedWindows()
+                self?.refreshBadges()
+            }
         }
-        // Things reach the Trash from Finder with nothing announced to DockIt, and it cannot watch a
-        // folder it is not allowed to open. Two `stat` calls every couple of seconds costs nothing.
-        // The running-app check sweeps up what no notification announces — chiefly an app switching
-        // its activation policy to become a regular app after launch. Only the check runs here, not
-        // a rebuild: a rebuild touches the disk for every pinned app and stack, and one stack on a
-        // dead SMB share would freeze the dock every two seconds.
-        let maintenanceTimer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+        startMaintenance()
+    }
+
+    /// Things reach the Trash from Finder with nothing announced to DockIt, and it cannot watch a
+    /// folder it is not allowed to open. Two `stat` calls every couple of seconds costs nothing.
+    /// The running-app check sweeps up what no notification announces — chiefly an app switching
+    /// its activation policy to become a regular app after launch. Only the check runs here, not
+    /// a rebuild: a rebuild touches the disk for every pinned app and stack, and one stack on a
+    /// dead SMB share would freeze the dock every two seconds.
+    ///
+    /// The running-app check and the badge sweep run every third beat (6 s). Each is a trip to
+    /// another process — about 4 ms of Launch Services for the first, the Dock over Accessibility
+    /// for the second — and neither is something anyone watches to the second: a policy flip is
+    /// rare, launches and quits are announced, and a badge is also swept on every app switch.
+    private func startMaintenance() {
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.maintenanceBeats += 1
                 self.refreshTrash()
-                self.rebuildIfRunningAppsChanged()
                 self.refreshMinimizedWindows(frontmostOnly: self.maintenanceBeats % 15 != 0)
-                self.refreshBadges()
+                if self.maintenanceBeats % 3 == 0 {
+                    self.rebuildIfRunningAppsChanged()
+                    self.refreshBadges()
+                }
             }
         }
-        maintenanceTimer.tolerance = 0.5
-        RunLoop.main.add(maintenanceTimer, forMode: .common)
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        maintenanceTimer = timer
+    }
+
+    /// Stopped while nobody can see the dock; see AppDelegate. Waking catches up at once on
+    /// everything the beat would have noticed in the meantime.
+    func setPaused(_ paused: Bool) {
+        if paused {
+            maintenanceTimer?.invalidate()
+            maintenanceTimer = nil
+            return
+        }
+        guard maintenanceTimer == nil else { return }
+        startMaintenance()
+        rebuild()
+        refreshTrash()
+        refreshMinimizedWindows()
+        refreshBadges()
     }
 
     /// Rebuilds whenever the pinned apps or stacks change, whether the dock itself changed them or
@@ -164,7 +215,8 @@ final class DockModel {
         observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps,
                  settings.showsMinimizedWindows, settings.showsNowPlaying, settings.showsWeather,
-                 settings.showsClock, settings.widgetOrder, settings.edge)
+                 settings.showsClock, settings.showsBattery, settings.showsCalendar, settings.widgetOrder,
+                 settings.edge, settings.showsRecentApps)
         } onChange: { [weak self] in
             self?.rebuild()
         }
@@ -230,6 +282,20 @@ final class DockModel {
         if Self.runningSignature(NSWorkspace.shared.runningApplications) != lastRunningSignature { rebuild() }
     }
 
+    /// One rebuild on the next turn of the run loop for however many asked in this one. A launch
+    /// alone announces itself three or four times — will launch, the running-apps KVO, did launch —
+    /// and each rebuild touches the disk for every pinned app and stack, on the main thread.
+    private func scheduleRebuild() {
+        guard !isRebuildPending else { return }
+        isRebuildPending = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.isRebuildPending = false
+                self?.rebuild()
+            }
+        }
+    }
+
     func rebuild() {
         let me = ProcessInfo.processInfo.processIdentifier
         let myBundleID = Bundle.main.bundleIdentifier
@@ -241,75 +307,27 @@ final class DockModel {
             $0.activationPolicy == .regular && $0.processIdentifier != me
                 && (myBundleID == nil || $0.bundleIdentifier != myBundleID)
         }
-        var runningByID: [String: NSRunningApplication] = [:]
-        for app in running {
-            if let url = app.bundleURL { runningByID[Self.key(url)] = app }
-        }
-
-        var result: [DockItem] = []
-        // Hidden apps start out "seen", so both loops below skip them, pinned or running.
-        var seen = Set(settings.hiddenApps.map { Self.key(URL(fileURLWithPath: $0)) })
-        seen.remove(Self.finderID)
-        for path in [Self.finderPath] + settings.pinnedApps {
-            if path.hasPrefix(spacerPrefix) {
-                result.append(DockItem(id: path, kind: .spacer, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
-                continue
-            }
-            let url = URL(fileURLWithPath: path)
-            let id = Self.key(url)
-            guard !seen.contains(id), FileManager.default.fileExists(atPath: path) else { continue }
-            seen.insert(id)
-            let app = runningByID[id]
-            result.append(DockItem(
-                id: id, kind: .app, url: url, name: FileManager.default.displayName(atPath: path),
-                isPinned: true, isRunning: app != nil, pid: app?.processIdentifier
-            ))
-        }
-        for app in running {
-            let id = app.bundleURL.map(Self.key) ?? "pid:\(app.processIdentifier)"
-            guard !seen.contains(id) else { continue }
-            seen.insert(id)
-            if app.bundleURL == nil, let icon = app.icon { icons[id] = icon }
-            result.append(DockItem(
-                id: id, kind: .app, url: app.bundleURL, name: app.localizedName ?? "",
-                isPinned: false, isRunning: true, pid: app.processIdentifier
-            ))
-        }
-        result.append(DockItem(id: "separator", kind: .separator, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
-        var seenStacks = Set<String>()
-        for path in settings.stacks {
-            // Folders only, each once: a document tile is not a stack, and a repeated path would give
-            // ForEach two items with one id.
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue,
-                  seenStacks.insert(path).inserted
-            else { continue }
-            result.append(DockItem(
-                id: "folder:" + path, kind: .folder, url: URL(fileURLWithPath: path),
-                name: FileManager.default.displayName(atPath: path), isPinned: true, isRunning: false, pid: nil
-            ))
-        }
-        for window in minimizedWindows {
-            result.append(DockItem(
-                id: "min:\(window.id)", kind: .minimizedWindow, url: nil, name: window.title,
-                isPinned: false, isRunning: true, pid: window.pid, windowID: window.id))
-        }
-        result.append(DockItem(id: "trash", kind: .trash, url: nil, name: "Trash", isPinned: true, isRunning: false, pid: nil))
-        // Bottom only: the widgets are wide, short text tiles, and a side dock's bar is one icon
-        // wide — they would spill across the screen or be crushed to nothing.
-        // Normalized on every read, not just at load: a sync or an import can hand back an order
-        // missing a widget, and a missing one would never show.
-        for name in settings.edge == .bottom ? normalizedWidgetOrder(settings.widgetOrder) : [] {
-            let enabled: Bool
-            let kind: DockItem.Kind
-            switch name {
-            case "nowPlaying": (enabled, kind) = (settings.showsNowPlaying, .nowPlaying)
-            case "weather": (enabled, kind) = (settings.showsWeather, .weather)
-            case "clock": (enabled, kind) = (settings.showsClock, .clock)
-            default: continue
-            }
-            guard enabled else { continue }
-            result.append(DockItem(id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil))
+        var enabledWidgets: Set<String> = []
+        if settings.showsNowPlaying { enabledWidgets.insert("nowPlaying") }
+        if settings.showsWeather { enabledWidgets.insert("weather") }
+        if settings.showsClock { enabledWidgets.insert("clock") }
+        if settings.showsBattery, WidgetsModel.hasBattery { enabledWidgets.insert("battery") }
+        if settings.showsCalendar { enabledWidgets.insert("calendar") }
+        let result = Self.items(
+            pinned: settings.pinnedApps, hidden: settings.hiddenApps, stacks: settings.stacks,
+            running: running.map(RunningApp.init), recent: settings.showsRecentApps ? settings.recentApps : [],
+            minimized: minimizedWindows,
+            widgetOrder: settings.widgetOrder, enabledWidgets: enabledWidgets, edge: settings.edge,
+            fileExists: { FileManager.default.fileExists(atPath: $0) },
+            isFolder: { path in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+            },
+            displayName: { FileManager.default.displayName(atPath: $0) }
+        )
+        // An app with no bundle has no file to take an icon from; its process has one.
+        for app in running where app.bundleURL == nil {
+            if let icon = app.icon { icons[RunningApp(app).id] = icon }
         }
 
         if result != items { items = result }
@@ -319,141 +337,110 @@ final class DockModel {
         icons = icons.filter { onBar.contains($0.key) }
     }
 
-    /// Minimized is each app's own word for it: the windows it lists over Accessibility with
-    /// AXMinimized set. Inferring it from the window server — off screen and on no Space — let
-    /// phantoms through (Teams' shell window and a Rio leftover, measured) and would count whole
-    /// other Desktops on macOS 26. The accepted trade-off: Electron apps list no AX windows at all,
-    /// so their minimized windows get no tile.
-    ///
-    /// Only checked, never prompted for: this runs off a timer, and the prompt belongs to a click.
-    ///
-    /// `frontmostOnly` asks just the frontmost app and keeps what the last sweep found for the rest.
-    private func refreshMinimizedWindows(frontmostOnly: Bool = false) {
-        guard settings.showsMinimizedWindows, AXIsProcessTrusted(), WindowActions.getWindowIDFn != nil else {
-            if !minimizedWindows.isEmpty {
-                minimizedWindows = []
-                rebuild()
+    /// A running app as the item list needs it: plain values, so the list can be built in a test.
+    struct RunningApp: Sendable {
+        let pid: pid_t
+        let bundleURL: URL?
+        let name: String
+
+        /// Its item id: the bundle's resolved path, or the pid for an app with no bundle.
+        var id: String { bundleURL.map(DockModel.key) ?? "pid:\(pid)" }
+    }
+
+    /// The bar's items in order: Finder, the pinned apps and spacers, the running apps not already
+    /// there, the recent apps behind a separator of their own, the separator, the stacks, the
+    /// minimized windows, the Trash, then the widgets. The disk is reached only through the three
+    /// closures (and `key`'s symlink resolution), for the tests.
+    nonisolated static func items(
+        pinned: [String], hidden: [String], stacks: [String], running: [RunningApp], recent: [String],
+        minimized: [MinimizedWindow], widgetOrder: [String], enabledWidgets: Set<String>, edge: DockEdge,
+        fileExists: (String) -> Bool, isFolder: (String) -> Bool, displayName: (String) -> String
+    ) -> [DockItem] {
+        var runningByID: [String: RunningApp] = [:]
+        for app in running {
+            if let url = app.bundleURL { runningByID[key(url)] = app }
+        }
+
+        var result: [DockItem] = []
+        // Hidden apps start out "seen", so both loops below skip them, pinned or running.
+        var seen = Set(hidden.map { key(URL(fileURLWithPath: $0)) })
+        seen.remove(finderID)
+        for path in [finderPath] + pinned {
+            if path.hasPrefix(spacerPrefix) {
+                result.append(DockItem(id: path, kind: .spacer, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
+                continue
             }
-            return
+            let url = URL(fileURLWithPath: path)
+            let id = key(url)
+            guard !seen.contains(id), fileExists(path) else { continue }
+            seen.insert(id)
+            let app = runningByID[id]
+            result.append(DockItem(
+                id: id, kind: .app, url: url, name: displayName(path),
+                isPinned: true, isRunning: app != nil, pid: app?.pid
+            ))
         }
-        // A sweep still waiting on a slow app: the next beat asks again.
-        guard !isSweepingMinimized else { return }
-        isSweepingMinimized = true
-        let me = ProcessInfo.processInfo.processIdentifier
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        // Running order, so a partial pass keeps the tiles where they were.
-        let order = NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular && $0.processIdentifier != me }
-            .map(\.processIdentifier)
-        let asked = frontmostOnly ? order.filter { $0 == frontmost } : order
-        Self.axQueue.async { [weak self] in
-            let answers = Dictionary(uniqueKeysWithValues: asked.map { ($0, Self.minimizedWindows(of: $0)) })
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.applyMinimizedWindows(order: order, answers: answers) }
+        for app in running {
+            let id = app.id
+            guard !seen.contains(id) else { continue }
+            seen.insert(id)
+            result.append(DockItem(
+                id: id, kind: .app, url: app.bundleURL, name: app.name,
+                isPinned: false, isRunning: true, pid: app.pid
+            ))
+        }
+        // Only apps with no tile already — pinned, running, hidden and Finder are all in `seen` by now.
+        var recents: [DockItem] = []
+        for path in recent where recents.count < recentAppsShown {
+            let url = URL(fileURLWithPath: path)
+            let id = key(url)
+            guard !seen.contains(id), fileExists(path) else { continue }
+            seen.insert(id)
+            recents.append(DockItem(
+                id: id, kind: .app, url: url, name: displayName(path), isPinned: false, isRunning: false, pid: nil))
+        }
+        if !recents.isEmpty {
+            result.append(DockItem(
+                id: "separator:recent", kind: .separator, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
+            result += recents
+        }
+        result.append(DockItem(id: "separator", kind: .separator, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
+        var seenStacks = Set<String>()
+        for path in stacks {
+            // Folders only, each once: a document tile is not a stack, and a repeated path would give
+            // ForEach two items with one id.
+            guard isFolder(path), seenStacks.insert(path).inserted else { continue }
+            result.append(DockItem(
+                id: "folder:" + path, kind: .folder, url: URL(fileURLWithPath: path),
+                name: displayName(path), isPinned: true, isRunning: false, pid: nil
+            ))
+        }
+        let appNames = Dictionary(running.map { ($0.pid, $0.name) }) { first, _ in first }
+        for window in minimized {
+            result.append(DockItem(
+                id: "min:\(window.id)", kind: .minimizedWindow, url: nil, name: window.title,
+                isPinned: false, isRunning: true, pid: window.pid, windowID: window.id,
+                appName: appNames[window.pid].flatMap { $0.isEmpty ? nil : $0 }))
+        }
+        result.append(DockItem(id: "trash", kind: .trash, url: nil, name: "Trash", isPinned: true, isRunning: false, pid: nil))
+        // Bottom only: the widgets are wide, short text tiles, and a side dock's bar is one icon
+        // wide — they would spill across the screen or be crushed to nothing.
+        // Normalized on every read, not just at load: a sync or an import can hand back an order
+        // missing a widget, and a missing one would never show.
+        for name in edge == .bottom ? normalizedWidgetOrder(widgetOrder) : [] {
+            let kind: DockItem.Kind
+            switch name {
+            case "nowPlaying": kind = .nowPlaying
+            case "weather": kind = .weather
+            case "clock": kind = .clock
+            case "battery": kind = .battery
+            case "calendar": kind = .calendar
+            default: continue
             }
+            guard enabledWidgets.contains(name) else { continue }
+            result.append(DockItem(id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil))
         }
-    }
-
-    /// One app's minimized windows. Off the main thread; see `axQueue`.
-    private nonisolated static func minimizedWindows(of pid: pid_t) -> [MinimizedWindow] {
-        guard let getWindowID = WindowActions.getWindowIDFn, let windows = WindowActions.windows(of: pid) else {
-            return []
-        }
-        var found: [MinimizedWindow] = []
-        for window in windows where isMinimized(window) {
-            var id: CGWindowID = 0
-            guard getWindowID(window, &id) == .success, id != 0 else { continue }
-            // The AX title, which needs no Screen Recording, unlike the window server's.
-            found.append(MinimizedWindow(id: id, pid: pid, title: string(of: window, kAXTitleAttribute) ?? ""))
-        }
-        return found
-    }
-
-    /// Apps that were not asked keep what the last sweep found for them.
-    private func applyMinimizedWindows(order: [pid_t], answers: [pid_t: [MinimizedWindow]]) {
-        isSweepingMinimized = false
-        guard settings.showsMinimizedWindows else { return }
-        let found = order.flatMap { pid in answers[pid] ?? minimizedWindows.filter { $0.pid == pid } }
-        let known = Set(minimizedWindows.map(\.identity))
-        guard Set(found.map(\.identity)) != known else { return }
-        let fresh = found.filter { !known.contains($0.identity) }
-        minimizedWindows = found
-        minimizedThumbs = minimizedThumbs.filter { thumb in found.contains { $0.id == thumb.key } }
-        rebuild()
-        // Thumbnails arrive late and only for windows still minimized then. Only with Screen
-        // Recording already granted: asking for it belongs to a hover over a preview, not to a
-        // window someone happened to minimize.
-        guard WindowCapture.canCapture else { return }
-        for window in fresh {
-            Task { [weak self] in
-                guard let image = await WindowCapture.windowThumbnail(windowID: window.id, maxHeight: 120)
-                else { return }
-                guard let self, minimizedWindows.contains(where: { $0.identity == window.identity }) else { return }
-                minimizedThumbs[window.id] = NSImage(cgImage: image, size: .zero)
-            }
-        }
-    }
-
-    /// Apps set their badge on their Dock tile, and macOS hands it to the real Dock, which is still
-    /// running under DockIt, only hidden. That Dock lists each tile over Accessibility with the badge
-    /// as `AXStatusLabel` beside the app's `AXURL`, so this reads them back. Measured: one sweep of
-    /// 23 tiles takes about a millisecond, and a new badge shows there within a second or two.
-    private func refreshBadges() {
-        guard AXIsProcessTrusted(),
-              let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
-        else {
-            if !badges.isEmpty { badges = [:] }
-            return
-        }
-        guard !isSweepingBadges else { return }
-        isSweepingBadges = true
-        let pid = dock.processIdentifier
-        Self.axQueue.async { [weak self] in
-            let found = Self.badges(from: Self.dockTiles(pid: pid))
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.isSweepingBadges = false
-                    if found != self.badges { self.badges = found }
-                }
-            }
-        }
-    }
-
-    /// Each Dock tile's URL and badge. Off the main thread; see `axQueue`.
-    private nonisolated static func dockTiles(pid: pid_t) -> [(url: URL?, label: String?)] {
-        let element = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(element, 0.3)
-        var tiles: [(url: URL?, label: String?)] = []
-        for list in children(of: element) {
-            for tile in children(of: list) {
-                var values: CFArray?
-                guard AXUIElementCopyMultipleAttributeValues(
-                    tile, [kAXURLAttribute, "AXStatusLabel"] as CFArray, [], &values) == .success,
-                    let values = values as? [Any], values.count == 2
-                else { continue }
-                tiles.append((values[0] as? URL, values[1] as? String))
-            }
-        }
-        return tiles
-    }
-
-    /// The badges by item id. Only apps' tiles carry a URL; an empty label is no badge. Pure, for the
-    /// tests.
-    nonisolated static func badges(from tiles: [(url: URL?, label: String?)]) -> [String: String] {
-        var out: [String: String] = [:]
-        for tile in tiles {
-            guard let url = tile.url, url.isFileURL, let label = tile.label, !label.isEmpty else { continue }
-            out[key(url)] = label
-        }
-        return out
-    }
-
-    private nonisolated static func children(of element: AXUIElement) -> [AXUIElement] {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success
-        else { return [] }
-        return value as? [AXUIElement] ?? []
+        return result
     }
 
     func icon(for item: DockItem) -> NSImage {
@@ -461,7 +448,12 @@ final class DockModel {
             return NSImage(named: trashIsFull ? NSImage.trashFullName : NSImage.trashEmptyName) ?? NSImage()
         }
         if let cached = icons[item.id] { return cached }
-        let icon = item.url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage()
+        let icon = if item.kind == .minimizedWindow {
+            // Its app's icon, which marks the tile until the window's snapshot lands.
+            item.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.icon } ?? NSImage()
+        } else {
+            item.url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage()
+        }
         icons[item.id] = icon
         return icon
     }
@@ -508,7 +500,7 @@ final class DockModel {
             if let windowID = item.windowID, let pid = item.pid {
                 WindowActions.raise(windowID, pid: pid)
             }
-        case .separator, .spacer, .nowPlaying, .weather, .clock:
+        case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar:
             break
         }
     }
@@ -531,40 +523,22 @@ final class DockModel {
     /// minimized apps stayed minimized.
     ///
     /// Needs Accessibility permission: another app's windows are only reachable through AX. The
-    /// system prompt is shown the first time it is needed in each run, not on every click; after that
-    /// the permission is only checked, and this is skipped until it is granted.
+    /// system prompt is shown the first time it is needed in each run — here or closing a window from a
+    /// preview — not on every click; after that the permission is only checked, and this is skipped
+    /// until it is granted.
     private func restoreMinimizedWindow(of app: NSRunningApplication) {
-        let trusted: Bool
-        if Self.hasPromptedForAccessibility {
-            trusted = AXIsProcessTrusted()
-        } else {
-            Self.hasPromptedForAccessibility = true
-            // The option's key as a literal: the exported `kAXTrustedCheckOptionPrompt` is a mutable
-            // global, which Swift 6 will not read from here.
-            trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        }
-        guard trusted, let windows = WindowActions.windows(of: app.processIdentifier) else { return }
+        guard WindowActions.requestAccessibilityOnce(),
+              let windows = WindowActions.windows(of: app.processIdentifier)
+        else { return }
         // Standard windows only: panels, sheets and palettes do not count as something to show.
-        let standard = windows.filter { Self.string(of: $0, kAXSubroleAttribute) == kAXStandardWindowSubrole }
-        guard !standard.isEmpty, standard.allSatisfy({ Self.isMinimized($0) }), let window = standard.first else {
+        let standard = windows.filter {
+            WindowActions.string(of: $0, kAXSubroleAttribute) == kAXStandardWindowSubrole
+        }
+        guard !standard.isEmpty, standard.allSatisfy(WindowActions.isMinimized), let window = standard.first else {
             return
         }
         AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-    }
-
-    private nonisolated static func isMinimized(_ window: AXUIElement) -> Bool {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success else {
-            return false
-        }
-        return (value as? Bool) == true
-    }
-
-    private nonisolated static func string(of element: AXUIElement, _ attribute: String) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-        return value as? String
     }
 
     private func startedLaunching(_ url: URL) {
@@ -581,12 +555,17 @@ final class DockModel {
     private func finishedLaunching(_ url: URL) {
         let id = Self.key(url)
         guard let start = launchStarts[id] else { return }
-        let elapsed = Date().timeIntervalSince(start)
-        let cycles = max((elapsed / Self.bounceCycle).rounded(.up), 1)
-        let remaining = cycles * Self.bounceCycle - elapsed
+        let remaining = Self.bounceRemaining(after: Date().timeIntervalSince(start))
         DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
             MainActor.assumeIsolated { self?.stopBouncing(id, startedAt: start) }
         }
+    }
+
+    /// How long a bounce `elapsed` seconds in has left until its cycle ends — at least one whole
+    /// cycle from the start. Pure, for the tests.
+    nonisolated static func bounceRemaining(after elapsed: TimeInterval) -> TimeInterval {
+        let cycles = max((elapsed / bounceCycle).rounded(.up), 1)
+        return cycles * bounceCycle - elapsed
     }
 
     /// Only when this is still the launch it was scheduled for: a quit and relaunch inside the
@@ -595,6 +574,63 @@ final class DockModel {
         guard launchStarts[id] == start else { return }
         launchStarts[id] = nil
         launching.remove(id)
+    }
+
+    enum ClickAction: Equatable { case open, reveal, openHidingOthers, hide }
+
+    /// What a click on an item does. Command reveals it in Finder and Option opens an app while
+    /// hiding the rest, as in the macOS Dock; with the setting on, a click on the app already in
+    /// front hides it. Pure, for the tests.
+    nonisolated static func clickAction(
+        kind: DockItem.Kind, hasURL: Bool, command: Bool, option: Bool, isFrontmost: Bool,
+        hidesFrontmost: Bool
+    ) -> ClickAction {
+        if command, hasURL, kind == .app || kind == .folder { return .reveal }
+        guard kind == .app else { return .open }
+        if option { return .openHidingOthers }
+        if hidesFrontmost, isFrontmost { return .hide }
+        return .open
+    }
+
+    /// A click on an icon, with the modifier keys held for it. VoiceOver's press passes none: its
+    /// own keys include Option, which would otherwise read as an Option-click and hide every app.
+    func click(_ item: DockItem, modifiers: NSEvent.ModifierFlags) {
+        let app = runningApp(item)
+        let isFrontmost = app != nil
+            && app?.processIdentifier == NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let action = Self.clickAction(
+            kind: item.kind, hasURL: item.url != nil, command: modifiers.contains(.command),
+            option: modifiers.contains(.option), isFrontmost: isFrontmost,
+            hidesFrontmost: settings.clickHidesFrontmostApp)
+        switch action {
+        case .open: if !openAsGrid(item) { open(item) }
+        case .reveal: reveal(item)
+        case .hide: app?.hide()
+        case .openHidingOthers:
+            open(item)
+            hideOthers(than: item)
+        }
+    }
+
+    /// Every other app hidden. Not `NSApp.hideOtherApplications`: that spares the app calling it —
+    /// DockIt — and so would hide the very app just clicked. An app still launching has no pid yet,
+    /// so everything else hides and it opens onto a clear screen.
+    private func hideOthers(than item: DockItem) {
+        let me = ProcessInfo.processInfo.processIdentifier
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular && app.processIdentifier != me
+            && app.processIdentifier != item.pid && !app.isHidden {
+            app.hide()
+        }
+    }
+
+    func hide(_ item: DockItem) { runningApp(item)?.hide() }
+    func unhide(_ item: DockItem) { runningApp(item)?.unhide() }
+
+    /// Unhidden and in front with every window, without the reopen event a click sends — that
+    /// could open a new window in an app that has none, which is not what this asks for.
+    func showAllWindows(_ item: DockItem) {
+        if let app = runningApp(item) { bringForward(app) }
     }
 
     func quit(_ item: DockItem) { runningApp(item)?.terminate() }
@@ -625,30 +661,38 @@ final class DockModel {
             settings.stacks.removeAll { "folder:" + $0 == item.id }
         case .spacer:
             settings.pinnedApps.removeAll { $0 == item.id }
-        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock:
+        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock, .battery, .calendar:
             return
         }
     }
 
-    /// Reorders the widgets: `name` lands before `target`, or at the end. Pure, for the tests.
-    nonisolated static func reordered(_ order: [String], moving name: String, before target: String?) -> [String] {
-        var out = order.filter { $0 != name }
-        if let target, let index = out.firstIndex(of: target) {
-            out.insert(name, at: index)
-        } else {
-            out.append(name)
-        }
-        return out
+    // MARK: - Recent apps
+
+    /// As many as the macOS Dock shows.
+    nonisolated static let recentAppsShown = 3
+    /// More kept than shown: an app on the list that is pinned or running again since has a tile
+    /// already and is skipped, and the next one down takes its place rather than leaving a gap.
+    nonisolated static let recentAppsKept = 10
+
+    /// Recorded at the quit, not the launch: while an app runs it has a running tile anyway, so
+    /// quitting is the moment it becomes recent. Only an app that had a tile of its own on the bar
+    /// — not a hidden one, a helper or DockIt's own osascript children — and not Finder, which is
+    /// always there. Off, nothing is recorded, so turning the switch on starts an empty list rather
+    /// than one kept behind the user's back.
+    private func recordQuit(_ url: URL) {
+        guard settings.showsRecentApps else { return }
+        let id = Self.key(url)
+        guard id != Self.finderID, items.contains(where: { $0.id == id && $0.kind == .app && $0.isRunning })
+        else { return }
+        let updated = Self.recordingRecent(url.path, in: settings.recentApps)
+        if updated != settings.recentApps { settings.recentApps = updated }
     }
 
-    private static let widgetIDPrefix = "widget:"
-
-    func placeWidget(_ name: String, before target: DockItem?) {
-        let targetName = target.flatMap { item -> String? in
-            item.id.hasPrefix(Self.widgetIDPrefix) ? String(item.id.dropFirst(Self.widgetIDPrefix.count)) : nil
-        }
-        guard name != targetName else { return }
-        settings.widgetOrder = Self.reordered(settings.widgetOrder, moving: name, before: targetName)
+    /// The recent list once the app at `path` has quit: first, once (compared after symlinks
+    /// resolve, as the bar compares apps), and no more than `recentAppsKept`. Pure, for the tests.
+    nonisolated static func recordingRecent(_ path: String, in list: [String]) -> [String] {
+        let id = key(URL(fileURLWithPath: path))
+        return Array(([path] + list.filter { key(URL(fileURLWithPath: $0)) != id }).prefix(recentAppsKept))
     }
 
     func addSpacer() {
@@ -700,121 +744,6 @@ final class DockModel {
         NSWorkspace.shared.open(url)
     }
 
-    /// Pins the app at `path` immediately before `target`, or at the end of the pinned apps. Moving an
-    /// already pinned app is the same operation: take it out, put it back in.
-    func place(_ path: String, before target: DockItem?) {
-        guard let pinned = Self.placed(path, before: target, in: settings.pinnedApps) else { return }
-        settings.pinnedApps = pinned
-        let id = Self.pinnedID(path)
-        // Pinning is an explicit ask to see the app, so it overrides an earlier Hide from Dock.
-        settings.hiddenApps.removeAll { Self.key(URL(fileURLWithPath: $0)) == id }
-    }
-
-    /// `place`'s list work: the pinned list with `path` moved or added before `target`, or nil when
-    /// the drop changes nothing. Pure, for the tests.
-    nonisolated static func placed(_ path: String, before target: DockItem?, in pinnedApps: [String]) -> [String]? {
-        let isSpacer = path.hasPrefix(spacerPrefix)
-        let id = pinnedID(path)
-        guard path.hasSuffix(".app") || isSpacer, id != finderID, id != target?.id else { return nil }
-        var pinned = pinnedApps.filter { pinnedID($0) != id }
-        var index = pinned.count
-        if let target, target.kind == .app || target.kind == .spacer, target.isPinned {
-            if target.id == finderID {
-                index = 0
-            } else if let found = pinned.firstIndex(where: { pinnedID($0) == target.id }) {
-                index = found
-            }
-        }
-        pinned.insert(path, at: index)
-        return pinned
-    }
-
-    /// A `pinnedApps` entry's item id: a spacer is its own id, an app its resolved path.
-    private nonisolated static func pinnedID(_ entry: String) -> String {
-        entry.hasPrefix(spacerPrefix) ? entry : key(URL(fileURLWithPath: entry))
-    }
-
-    // MARK: - Drag and drop
-
-    func dragPayload(for item: DockItem) -> NSItemProvider {
-        // Spacers and widgets drag by their identity strings, exactly as an app drags by its path.
-        if item.kind == .spacer || item.id.hasPrefix(Self.widgetIDPrefix) {
-            let provider = NSItemProvider()
-            let payload = Data(item.id.utf8)
-            provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .ownProcess) {
-                completion in
-                completion(payload, nil)
-                return nil
-            }
-            return provider
-        }
-        guard item.kind == .app, item.id != Self.finderID, let url = item.url else { return NSItemProvider() }
-        let provider = NSItemProvider()
-        let data = Data(url.path.utf8)
-        provider.registerDataRepresentation(forTypeIdentifier: dragType.identifier, visibility: .all) { completion in
-            completion(data, nil)
-            return nil
-        }
-        return provider
-    }
-
-    /// A drop on an icon (`target`) or on the bar itself (nil).
-    func handleDrop(_ providers: [NSItemProvider], onto target: DockItem?) -> Bool {
-        let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
-        if files.isEmpty {
-            guard let provider = providers.first(where: {
-                $0.hasItemConformingToTypeIdentifier(dragType.identifier)
-            }) else { return false }
-            _ = provider.loadDataRepresentation(forTypeIdentifier: dragType.identifier) { [weak self] data, _ in
-                guard let data, let path = String(data: data, encoding: .utf8) else { return }
-                Task { @MainActor in
-                    if path.hasPrefix(Self.widgetIDPrefix) {
-                        self?.placeWidget(String(path.dropFirst(Self.widgetIDPrefix.count)), before: target)
-                    } else {
-                        self?.place(path, before: target)
-                    }
-                }
-            }
-            return true
-        }
-        Task {
-            var urls: [URL] = []
-            for provider in files {
-                if let url = await loadURL(provider) { urls.append(url) }
-            }
-            drop(urls, onto: target)
-        }
-        return true
-    }
-
-    private func loadURL(_ provider: NSItemProvider) async -> URL? {
-        await withCheckedContinuation { continuation in
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
-        }
-    }
-
-    private func drop(_ urls: [URL], onto target: DockItem?) {
-        guard !urls.isEmpty else { return }
-        if target?.kind == .trash {
-            NSWorkspace.shared.recycle(urls) { [weak self] _, _ in
-                Task { @MainActor in self?.refreshTrash() }
-            }
-            return
-        }
-        if urls.allSatisfy({ $0.pathExtension == "app" }) {
-            for url in urls { place(url.path, before: target) }
-            return
-        }
-        if let target, target.kind == .app, let app = target.url {
-            NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-            return
-        }
-        let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
-        if target == nil || target?.kind == .folder, !folders.isEmpty {
-            settings.stacks += folders.map(\.path).filter { !settings.stacks.contains($0) }
-        }
-    }
-
     // MARK: - Helpers
 
     private static let trashURL = URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")
@@ -828,52 +757,11 @@ final class DockModel {
     private func runningApp(_ item: DockItem) -> NSRunningApplication? {
         item.pid.flatMap { NSRunningApplication(processIdentifier: $0) }
     }
+}
 
-    /// A folder stack: the 20 most recently added items, newest first, as a menu at the pointer.
-    private func showStack(_ folder: URL) {
-        let keys: Set<URLResourceKey> = [.addedToDirectoryDateKey, .contentModificationDateKey]
-        var files: [URL] = []
-        var isDenied = false
-        do {
-            files = try FileManager.default.contentsOfDirectory(
-                at: folder, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
-            )
-        } catch {
-            // Desktop, Documents, Downloads and removable volumes are behind a privacy permission; a
-            // folder DockIt may not read is not an empty one.
-            isDenied = (error as? CocoaError)?.code == .fileReadNoPermission
-        }
-        func added(_ url: URL) -> Date {
-            let values = try? url.resourceValues(forKeys: keys)
-            return values?.addedToDirectoryDate ?? values?.contentModificationDate ?? .distantPast
-        }
-
-        let menu = NSMenu()
-        let newest = files.map { ($0, added($0)) }.sorted { $0.1 > $1.1 }.prefix(20).map(\.0)
-        for file in newest {
-            let icon = NSWorkspace.shared.icon(forFile: file.path)
-            icon.size = NSSize(width: 16, height: 16)
-            menu.addItem(ClosureMenuItem(file.lastPathComponent, image: icon) { NSWorkspace.shared.open(file) })
-        }
-        if isDenied {
-            let denied = NSMenuItem(title: "DockIt can't read this folder", action: nil, keyEquivalent: "")
-            denied.isEnabled = false
-            menu.addItem(denied)
-            menu.addItem(ClosureMenuItem("Open Files and Folders Settings…") {
-                if let url = URL(
-                    string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
-                ) {
-                    NSWorkspace.shared.open(url)
-                }
-            })
-        } else if newest.isEmpty {
-            let empty = NSMenuItem(title: "No Items", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        }
-        menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem("Open in Finder") { NSWorkspace.shared.open(folder) })
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+extension DockModel.RunningApp {
+    init(_ app: NSRunningApplication) {
+        self.init(pid: app.processIdentifier, bundleURL: app.bundleURL, name: app.localizedName ?? "")
     }
 }
 
