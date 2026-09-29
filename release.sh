@@ -187,7 +187,9 @@ else
     # it would rewrite their entries to point at this release's download folder, where they don't
     # exist.
     cp "$ZIP" "$STAGING/"
-    APPCAST_ARGS=()
+    # The keychain's default Sparkle account holds another app's key — each app has its own — so
+    # a hand run reads DockPlus's from its own account.
+    APPCAST_ARGS=(--account DockPlus)
     if [[ -n "${SPARKLE_KEY_FILE:-}" ]]; then
         APPCAST_ARGS=(--ed-key-file "$SPARKLE_KEY_FILE")
     fi

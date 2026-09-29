@@ -28,10 +28,11 @@
 	<string>https://kdbaustert.github.io/DockPlus/appcast.xml</string>
 	<!-- The public half of the EdDSA key every release is signed with. Sparkle checks each
 	     download against it before unpacking, so nobody else can ship DockPlus's users an update.
-	     The private half is in the login keychain, where release.sh's generate_appcast reads
-	     it. -->
+	     The private half is in the login keychain under the "DockPlus" account — each app has its
+	     own key, and the default account belongs to another app — where release.sh's
+	     generate_appcast reads it. -->
 	<key>SUPublicEDKey</key>
-	<string>FYMMALSs2mAccV/rUgQcByyY+mdkpXSBA/nD4JpwvT0=</string>
+	<string>XbUIRhcrsRLXQ7nojB3Fw724IiGKnoAdNjgipSkvkcU=</string>
 	<!-- Check daily, but install only when asked. -->
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
