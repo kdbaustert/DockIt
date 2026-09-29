@@ -264,6 +264,7 @@ final class SettingsSync {
     @ObservationIgnored private var pendingWrite: DispatchWorkItem?
     @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
     @ObservationIgnored private var poll: Timer?
+    @ObservationIgnored private var isFetching = false
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -410,7 +411,16 @@ final class SettingsSync {
         // Read it on a background queue instead, which brings it down; the watcher sees it land.
         var info = stat()
         if stat(url.path, &info) == 0, info.st_flags & UInt32(SF_DATALESS) != 0 {
-            DispatchQueue.global(qos: .utility).async { _ = try? Data(contentsOf: url) }
+            // One at a time: offline, each blocks until the network returns, and the 30 s poll and
+            // every folder event would otherwise park another thread on it.
+            guard !isFetching else { return .pending }
+            isFetching = true
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                _ = try? Data(contentsOf: url)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.isFetching = false }
+                }
+            }
             return .pending
         }
         let modified = Self.modified(url)

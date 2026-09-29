@@ -21,6 +21,8 @@ extension DockModel {
                 minimizedWindows = []
                 rebuild()
             }
+            // Pruned only by a sweep, which no longer runs: without this the pictures stayed held.
+            if !minimizedThumbs.isEmpty { minimizedThumbs = [:] }
             return
         }
         // A sweep still waiting on a slow app: the next beat asks again.

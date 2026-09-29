@@ -21,11 +21,11 @@ enum SystemDock {
 
     static func hide() {
         guard !isRestoring else { return }
-        let dock = UserDefaults(suiteName: domain)
         let store = UserDefaults.standard
         // Only the first time: after a crash or a kill the Dock is still hidden, and capturing it
         // again would overwrite the originals with DockPlus's own values.
         if store.dictionary(forKey: savedKey) == nil {
+            let dock = UserDefaults(suiteName: domain)
             var saved: [String: Any] = [:]
             if let value = dock?.object(forKey: "autohide") { saved["autohide"] = value }
             if let value = dock?.object(forKey: "autohide-delay") { saved["autohide-delay"] = value }

@@ -207,8 +207,8 @@ final class DockController {
     /// is over DockPlus's own panel, a local one needs the panel to be key (it never is), and neither
     /// reliably reports a Finder drag in progress. Reading the location is cheap. Near the edge it
     /// runs at the display's refresh rate (120 Hz on ProMotion) so magnification keeps up with the
-    /// pointer; the rate drops to 10 Hz whenever the pointer is away from the edge, and to nothing
-    /// once it has rested there a second — see `canIdle`.
+    /// pointer; the rate drops to 10 Hz whenever the pointer is away from the edge or has rested
+    /// near it for `slowAfterStillTicks`, and to nothing once it has rested off the bar — see `canIdle`.
     private func setPolling(fast: Bool) {
         guard !isPaused, timer == nil || fast != isPollingFast else { return }
         disarmMonitors()
@@ -303,10 +303,14 @@ final class DockController {
         }
         if panel.ignoresMouseEvents == overBar { panel.ignoresMouseEvents = !overBar }
 
-        let nearZone = state.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
-        let fast = onEdge && across < nearZone && !inGrid
         if mouse == lastMouse { stillTicks += 1 } else { stillTicks = 0 }
         lastMouse = mouse
+        // Display rate only while the pointer is moving. At rest in the band — where it sits after
+        // every click on an icon — the fast poll ran forever, reading a pointer that had not moved;
+        // now it drops to 10 Hz, and off the bar from there to idle. The first move back costs up
+        // to one slow tick before the rate returns.
+        let nearZone = state.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
+        let fast = onEdge && across < nearZone && !inGrid && stillTicks < Self.slowAfterStillTicks
         if !fast, canIdle() {
             goIdle()
         } else {
@@ -318,6 +322,9 @@ final class DockController {
 
     /// About a second at the slow rate with the pointer where it was.
     private static let idleAfterStillTicks = 10
+
+    /// Half a second at 120 Hz, a second at 60, with the pointer where it was.
+    private static let slowAfterStillTicks = 60
 
     /// Whether nothing is left for a tick to do until the pointer moves. At rest away from the edge
     /// the 10 Hz poll was two thirds of DockPlus's idle wakeups (about 10 of 15 a second), each one
@@ -363,17 +370,25 @@ final class DockController {
             .mouseMoved, .leftMouseDown, .leftMouseDragged, .rightMouseDown, .rightMouseDragged,
             .otherMouseDown, .otherMouseDragged, .scrollWheel,
         ]
+        // A tick at once, not at the first slow one: idle now happens beside the bar too, and a
+        // pointer moving onto it from there would wait a tenth of a second for magnification.
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.setPolling(fast: false) }
+            MainActor.assumeIsolated { self?.wake() }
         }) {
             monitors.append(global)
         }
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.setPolling(fast: false) }
+            MainActor.assumeIsolated { self?.wake() }
             return event
         }) {
             monitors.append(local)
         }
+    }
+
+    private func wake() {
+        setPolling(fast: false)
+        guard timer != nil else { return }
+        tick()
     }
 
     private func disarmMonitors() {
@@ -390,6 +405,10 @@ final class DockController {
     private func updateAutoHide(onEdge: Bool, across: CGFloat, overBar: Bool) {
         guard autoHidesNow else {
             if state.isHidden { setHidden(false) }
+            // A countdown left running when the overlap cleared kept `canIdle` false for good, and
+            // hid the dock with no delay the next time a window covered it.
+            leftBarAt = nil
+            edgeHeldAt = nil
             return
         }
         if state.isHidden {

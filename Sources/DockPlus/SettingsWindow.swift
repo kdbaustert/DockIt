@@ -396,9 +396,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     /// Back to a background app when Settings goes away, on the next turn of the run loop — at
-    /// `willClose` the window is still on screen.
+    /// `willClose` the window is still on screen. The window goes with it: closing one that is kept
+    /// fires no `onDisappear` and cancels no `.task`, so the General pane's permission poll and the
+    /// Widgets pane's preview ran for the life of the process. Dropping the content view ends both;
+    /// the next `present()` builds a new window, and the autosave name brings its frame back.
     func windowWillClose(_ notification: Notification) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [self] in
+            window?.contentView = nil
+            window = nil
             NSApp.setActivationPolicy(.accessory)
         }
     }

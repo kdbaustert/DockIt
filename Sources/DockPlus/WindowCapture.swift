@@ -31,8 +31,11 @@ enum WindowCapture {
     /// Front-to-back thumbnails of `pid`'s windows. Empty when permission is missing, the app has no
     /// windows, or the list cannot be read.
     nonisolated static func thumbnails(pid: pid_t, maxHeight: CGFloat) async -> [WindowThumb] {
+        // Cancelled between steps: the pointer sweeping along the bar with the panel up cancels a
+        // capture per icon passed, and each ran to the end regardless — a window list, an AX query
+        // and up to ten screenshots nobody would see.
         guard let content = try? await SCShareableContent
-            .excludingDesktopWindows(true, onScreenWindowsOnly: false)
+            .excludingDesktopWindows(true, onScreenWindowsOnly: false), !Task.isCancelled
         else { return [] }
         // The title filter is the one that matters: layer-0 debris — Chrome's dropdown surfaces,
         // Electron overlays — is untitled. `onScreenWindowsOnly: false` keeps windows on other
@@ -49,6 +52,7 @@ enum WindowCapture {
             // cannot decide it: Electron apps claim no windows at all.
             return window.isOnScreen || isOnSomeSpace(window.windowID) || axClaimed.contains(window.windowID)
         }.prefix(10)
+        guard !Task.isCancelled else { return [] }
         return await captureAll(Array(windows), maxHeight: maxHeight)
     }
 
@@ -76,7 +80,8 @@ enum WindowCapture {
         let captured: [(Int, WindowThumb)] = await withTaskGroup(of: (Int, WindowThumb)?.self) { group in
             for job in jobs {
                 group.addTask {
-                    guard let image = await capture(job.window, maxHeight: maxHeight), !isBlank(image) else {
+                    guard !Task.isCancelled,
+                          let image = await capture(job.window, maxHeight: maxHeight), !isBlank(image) else {
                         return nil
                     }
                     return (job.index, WindowThumb(

@@ -147,9 +147,14 @@ final class DockModel {
         let center = NSWorkspace.shared.notificationCenter
         // "Will launch" as well as "did": an app started anywhere — Spotlight, Finder, a link — bounces,
         // as it does in the real Dock, not only one clicked here.
+        // Not DockPlus's own: the now-playing poll's osascript children register under its bundle
+        // (see `rebuild`), and each launch and exit was a rebuild and a re-render of every icon.
+        let myBundleID = Bundle.main.bundleIdentifier
         center.addObserver(forName: NSWorkspace.willLaunchApplicationNotification, object: nil, queue: .main) {
             [weak self] note in
-            let url = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleURL
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard myBundleID == nil || app?.bundleIdentifier != myBundleID else { return }
+            let url = app?.bundleURL
             MainActor.assumeIsolated {
                 if let url { self?.startedLaunching(url) }
                 // An app that is not pinned has no icon until it is in the running list, so it
@@ -159,7 +164,9 @@ final class DockModel {
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
-                let url = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleURL
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard myBundleID == nil || app?.bundleIdentifier != myBundleID else { return }
+                let url = app?.bundleURL
                 MainActor.assumeIsolated {
                     if let url {
                         self?.finishedLaunching(url)

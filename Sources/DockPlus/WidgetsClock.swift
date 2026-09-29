@@ -18,6 +18,8 @@ extension WidgetsModel {
                           interval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tickClock() }
         }
+        // Late rather than early, so the minute has always turned; a second late is not seen.
+        timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         clockTimer = timer
     }

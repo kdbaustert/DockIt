@@ -51,27 +51,30 @@ extension WidgetsModel {
     /// power source too, and is not counted.
     nonisolated static let hasBattery = internalBattery() != nil
 
+    /// One source for the life of the model, added and removed as the tile comes and goes. A new
+    /// source per change leaked a Mach port each time, releasing it or not — 200 over 200 cycles,
+    /// measured — and every visit to the Widgets pane made one; the same source re-added costs none.
     func configureBattery() {
-        if let batterySource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), batterySource, .commonModes)
-            self.batterySource = nil
-        }
+        let main = CFRunLoopGetMain()
         guard settings.showsBattery || isPreviewing, Self.hasBattery else {
+            if let batterySource { CFRunLoopRemoveSource(main, batterySource, .commonModes) }
             battery = nil
             return
         }
-        // A C callback cannot capture, so the model rides along as the context, unretained: the
-        // source is removed above before it could outlive the model, and `shared` never goes.
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        guard let source = IOPSNotificationCreateRunLoopSource({ context in
-            guard let context else { return }
-            MainActor.assumeIsolated {
-                Unmanaged<WidgetsModel>.fromOpaque(context).takeUnretainedValue().readBattery()
-            }
-        }, context)?.takeRetainedValue()
-        else { return }
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        batterySource = source
+        if batterySource == nil {
+            // A C callback cannot capture, so the model rides along as the context, unretained:
+            // `shared` never goes, so the source cannot outlive it.
+            let context = Unmanaged.passUnretained(self).toOpaque()
+            batterySource = IOPSNotificationCreateRunLoopSource({ context in
+                guard let context else { return }
+                MainActor.assumeIsolated {
+                    Unmanaged<WidgetsModel>.fromOpaque(context).takeUnretainedValue().readBattery()
+                }
+            }, context)?.takeRetainedValue()
+        }
+        guard let batterySource else { return }
+        // Adding a source already on the run loop does nothing.
+        CFRunLoopAddSource(main, batterySource, .commonModes)
         readBattery()
     }
 

@@ -69,14 +69,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsSync = SettingsSync(settings: settings)
         if settings.hidesSystemDock { SystemDock.hide() }
         startWatchdog()
+        observeContinuously(ownedBy: self) { [settings] in
+            _ = settings.hidesSystemDock
+        } onChange: { [weak self] in
+            self?.startWatchdog()
+        }
         observeSleep()
     }
 
     /// The Dock's preferences are not DockPlus's to keep. Something else rewrote them within an hour
     /// of the first install — the delay vanished and the Dock slid up at the screen edge again —
     /// so hiding once at launch is not enough. The check is two preference reads; the Dock is
-    /// only touched when they are wrong.
+    /// only touched when they are wrong. Only while DockPlus hides the Dock at all: with the setting
+    /// off, it woke every three seconds to read a flag.
     private func startWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+        guard settings.hidesSystemDock, !isPaused else { return }
         let watchdog = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 if self?.settings.hidesSystemDock == true { SystemDock.hide() }
