@@ -111,10 +111,12 @@ final class DockModel {
     private(set) var launching: Set<String> = []
     /// Each app's badge — an unread count, usually — by item id.
     var badges: [String: String] = [:]
-    /// The windows the last-opened app context menu asked for. One app's at a time: only one menu
-    /// is ever open. See `requestMenuWindows` in DockModel+Sweeps.swift.
-    var menuWindows: MenuWindows?
-    @ObservationIgnored var menuWindowsAsked: (pid: pid_t, at: Date)?
+    /// The windows each app's context menu asked for, by pid. Not one slot for the open menu: SwiftUI
+    /// keeps every menu it has built observing this, so with one slot two apps' menus took it from
+    /// each other forever and the open one flashed (measured). See `requestMenuWindows` in
+    /// DockModel+Sweeps.swift.
+    var menuWindows: [pid_t: MenuWindows] = [:]
+    @ObservationIgnored var menuWindowsAsked: [pid_t: Date] = [:]
 
     @ObservationIgnored let settings: DockSettings
     /// Opens a Grid stack's grid from the dock it was clicked on, answering whether one did. Set by

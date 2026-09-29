@@ -98,14 +98,14 @@ extension DockModel {
     /// calls this again, hence the one-second rule — without it each answer would ask once more.
     func requestMenuWindows(for pid: pid_t) {
         guard AXIsProcessTrusted(), WindowActions.getWindowIDFn != nil else { return }
-        if let asked = menuWindowsAsked, asked.pid == pid, Date().timeIntervalSince(asked.at) < 1 { return }
-        menuWindowsAsked = (pid, Date())
+        if let asked = menuWindowsAsked[pid], Date().timeIntervalSince(asked) < 1 { return }
+        menuWindowsAsked[pid] = Date()
         Self.axQueue.async { [weak self] in
             let found = MenuWindows(pid: pid, windows: Self.menuWindows(of: pid))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, found != self.menuWindows else { return }
-                    self.menuWindows = found
+                    guard let self, found != self.menuWindows[pid] else { return }
+                    self.menuWindows[pid] = found
                 }
             }
         }

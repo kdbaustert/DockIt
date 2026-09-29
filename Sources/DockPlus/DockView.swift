@@ -326,7 +326,7 @@ private struct AppWindowList: View {
 
     var body: some View {
         let _ = model.requestMenuWindows(for: pid)
-        if let listed = model.menuWindows, listed.pid == pid, !listed.windows.isEmpty {
+        if let listed = model.menuWindows[pid], !listed.windows.isEmpty {
             ForEach(listed.windows, id: \.id) { window in
                 Button(window.title) { WindowActions.raise(window.id, pid: pid) }
             }
