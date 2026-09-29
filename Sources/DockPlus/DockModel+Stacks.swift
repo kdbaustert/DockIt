@@ -18,8 +18,7 @@ enum StackSort: String, CaseIterable, StackOption {
 }
 
 /// How a click on a stack in the dock shows it: the menu it always opened, or a grid of large icons
-/// over the icon. The menu bar item's list keeps the menu for every stack — it has no icon for a
-/// grid to hang from.
+/// over the icon.
 enum StackDisplay: String, CaseIterable, StackOption {
     case menu, grid
 
@@ -63,8 +62,7 @@ extension DockModel {
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
-    /// A Grid stack clicked on the bar. The click comes through here, not `open`: the menu bar item
-    /// opens stacks through `open`, and keeps the menu for them.
+    /// A Grid stack clicked on the bar. The click comes through here, not `open`.
     func openAsGrid(_ item: DockItem) -> Bool {
         guard item.kind == .folder, let url = item.url, settings.stackDisplay(for: url.path) == .grid else {
             return false

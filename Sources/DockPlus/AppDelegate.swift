@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updater = SPUStandardUpdaterController(
                 startingUpdater: true, updaterDelegate: updateChannels, userDriverDelegate: nil)
         }
-        menuBarItem = MenuBarItem(settings: settings, model: model, updater: updater)
+        menuBarItem = MenuBarItem(settings: settings, updater: updater)
         settingsSync = SettingsSync(settings: settings)
         if settings.hidesSystemDock { SystemDock.hide() }
         startWatchdog()
