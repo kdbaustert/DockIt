@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-// The settings window, built the way Cmd-Tab builds its own so the two are indistinguishable: a
-// System Settings-shaped sidebar of tabs with gradient icon badges and a search field that jumps
-// to any individual setting, and content built from the titled cards in `SettingsChrome.swift`.
+// The settings window: a System Settings-shaped sidebar of tabs with gradient icon badges and a
+// search field that jumps to any individual setting, and content built from the titled cards in
+// `SettingsChrome.swift`.
 
 // MARK: - Tabs
 
@@ -12,8 +12,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Grouped the way Cmd-Tab groups its sidebar: the dock's own tabs under a heading, the two
-    /// bookends on their own.
+    /// The dock's own tabs under a heading, the two bookends on their own.
     static let groups: [(header: String?, tabs: [SettingsTab])] = [
         (nil, [.general]),
         ("Dock", [.appearance, .widgets, .interactions, .applications, .stacks]),
@@ -32,7 +31,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Cmd-Tab's own badge values for the tabs the two apps share in spirit.
+    /// Badge values kept in step with the sibling apps' settings, tab for tab.
     var gradient: (Color, Color) {
         switch self {
         case .general: (Color(hex: "#8E8E93")!, Color(hex: "#6C6C70")!)
@@ -45,7 +44,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Cmd-Tab's icon family: solid, geometric, enclosed where a shape allows it.
+    /// One icon family: solid, geometric, enclosed where a shape allows it.
     var symbol: String {
         switch self {
         case .general: "gearshape.2.fill"
@@ -373,9 +372,9 @@ private struct SettingsRootView: View {
 
 // MARK: - Window
 
-/// Hosts the settings window, the way Cmd-Tab's `SettingsPresenter` does: a full-size-content
-/// window with a hidden title, so the sidebar runs the full height with the traffic lights over it;
-/// an ordinary app (menu bar, Cmd-Tab entry) only while it is open.
+/// Hosts the settings window: a full-size-content window with a hidden title, so the sidebar runs
+/// the full height with the traffic lights over it; an ordinary app (menu bar, app-switcher entry)
+/// only while it is open.
 @MainActor
 final class SettingsWindow: NSObject, NSWindowDelegate {
     private static let shared = SettingsWindow()

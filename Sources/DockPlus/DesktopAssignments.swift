@@ -3,8 +3,8 @@ import AppKit
 /// The macOS Dock's Options ▸ Assign To: which Desktop (Space) an app's windows open on.
 ///
 /// macOS keeps the answer in `com.apple.spaces` under `app-bindings` — lowercased bundle identifier
-/// to Space UUID, with an empty string meaning All Desktops and no entry meaning None (both measured
-/// by Cmd-Tab's DesktopAssignments.swift, which reads the same dictionary). The Dock process owns
+/// to Space UUID, with an empty string meaning All Desktops and no entry meaning None (both
+/// measured against the live dictionary). The Dock process owns
 /// Spaces and reads the dictionary when it starts, so a change is written through CFPreferences and
 /// the Dock restarted. Measured 2026-09-28: a binding written that way survived the restart, and
 /// every other binding came through untouched.
@@ -68,8 +68,8 @@ enum DesktopAssignments {
     }
 }
 
-/// The window server's Space layout, through the private SkyLight calls Cmd-Tab's SpaceMover uses —
-/// there is no public API for which Desktop is in front, or for the UUIDs bindings are keyed by.
+/// The window server's Space layout, through private SkyLight calls — there is no public API for
+/// which Desktop is in front, or for the UUIDs bindings are keyed by.
 @MainActor
 private enum Spaces {
     private typealias MainConnectionFn = @convention(c) () -> Int32

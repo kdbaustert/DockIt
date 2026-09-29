@@ -222,7 +222,7 @@ enum SettingsFile {
 // MARK: - iCloud
 
 /// Keeps the portable settings in a file in iCloud Drive, so every Mac signed in to the same account
-/// shares them. Cmd-Tab's approach: a plain file in the user's own iCloud Drive folder, which syncs
+/// shares them: a plain file in the user's own iCloud Drive folder, which syncs
 /// like any other document and needs no ubiquity entitlement — which a locally signed app cannot
 /// have, so `NSUbiquitousKeyValueStore` is not an option.
 ///

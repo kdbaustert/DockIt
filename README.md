@@ -11,7 +11,7 @@
 </p>
 
 DockPlus draws its own Liquid Glass dock and keeps the macOS Dock hidden. The system Dock stays
-running, because it also draws Cmd-Tab, Mission Control and Spaces; DockPlus just keeps it out of
+running, because it also draws the app switcher, Mission Control and Spaces; DockPlus just keeps it out of
 sight.
 
 ## Features

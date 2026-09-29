@@ -20,16 +20,16 @@
 	<string>0.1.0-beta.1</string>
 	<key>CFBundleVersion</key>
 	<string>25</string>
-	<!-- Updates, through Sparkle, from a feed served by GitHub Pages off the gh-pages branch — the
-	     same arrangement as Cmd-Tab and FinderPlus. The release workflow adds each release's entry
-	     to it; the releases themselves carry only the zip. build.sh deletes this key from local
-	     builds, so a development copy never updates itself out from under its developer. -->
+	<!-- Updates, through Sparkle, from a feed served by GitHub Pages off the gh-pages branch. The
+	     release workflow adds each release's entry to it; the releases themselves carry only the
+	     zip. build.sh deletes this key from local builds, so a development copy never updates
+	     itself out from under its developer. -->
 	<key>SUFeedURL</key>
 	<string>https://kdbaustert.github.io/DockPlus/appcast.xml</string>
-	<!-- The public half of the EdDSA key every release is signed with (the same key as Cmd-Tab's
-	     and FinderPlus's; one key serves every app). Sparkle checks each download against it before
-	     unpacking, so nobody else can ship DockPlus's users an update. The private half is in the
-	     login keychain, where release.sh's generate_appcast reads it. -->
+	<!-- The public half of the EdDSA key every release is signed with. Sparkle checks each
+	     download against it before unpacking, so nobody else can ship DockPlus's users an update.
+	     The private half is in the login keychain, where release.sh's generate_appcast reads
+	     it. -->
 	<key>SUPublicEDKey</key>
 	<string>FYMMALSs2mAccV/rUgQcByyY+mdkpXSBA/nD4JpwvT0=</string>
 	<!-- Check daily, but install only when asked. -->

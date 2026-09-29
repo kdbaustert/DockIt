@@ -5,7 +5,7 @@
 #   RELEASE=1          keep the update feed in Info.plist; without it the feed is removed, so a
 #                      local build never updates itself out from under its developer
 #   VERSION, BUILD     stamp CFBundleShortVersionString / CFBundleVersion into the built bundle
-#   CODESIGN_IDENTITY  signing identity; "Cmd-Tab Local" when unset, ad-hoc when that is absent
+#   CODESIGN_IDENTITY  signing identity; "DockPlus Local" when unset, ad-hoc when that is absent
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -67,16 +67,17 @@ if [[ "${RELEASE:-0}" != "1" ]]; then
     /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$APP/Contents/Info.plist" 2>/dev/null || true
 fi
 
-# Signed with a stable identity when one is present, as Cmd-Tab is — and with Cmd-Tab's own local
-# certificate by default. macOS keys the Accessibility permission (which restoring minimized
-# windows needs) to the app's designated requirement: with the same certificate every time it stays
-# put and the permission survives a rebuild. Ad-hoc signing has no certificate, so the requirement
-# falls back to the code hash, which changes every build. Sharing the certificate does not merge
-# the two apps' permissions; the requirement names the bundle identifier too.
-IDENTITY="${CODESIGN_IDENTITY:-Cmd-Tab Local}"
+# Signed with a stable identity when one is present — the app's own local certificate by default.
+# macOS keys the Accessibility permission (which restoring minimized windows needs) to the app's
+# designated requirement: with the same certificate every time it stays put and the permission
+# survives a rebuild. Ad-hoc signing has no certificate, so the requirement falls back to the code
+# hash, which changes every build.
+IDENTITY="${CODESIGN_IDENTITY:-DockPlus Local}"
 # No `grep -q`: under pipefail an early exit can SIGPIPE `security` and fail a build that has the
-# identity over to the ad-hoc branch.
-if security find-identity -v -p codesigning | grep -F -- "$IDENTITY" >/dev/null; then
+# identity over to the ad-hoc branch. No `-v`: it lists only trusted identities, and a self-signed
+# one is untrusted on a CI runner, where nothing ran add-trusted-cert — codesign signs with it all
+# the same, which release.yml relies on.
+if security find-identity -p codesigning | grep -F -- "$IDENTITY" >/dev/null; then
     echo "==> Signing as \"$IDENTITY\""
     SIGN_AS="$IDENTITY"
 else

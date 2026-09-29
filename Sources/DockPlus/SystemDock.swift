@@ -1,7 +1,7 @@
 import Foundation
 
-/// The macOS Dock, which DockPlus hides rather than kills: the same process draws Cmd-Tab, Mission
-/// Control, Spaces and the wallpaper, so it has to stay running. Auto-hide with a delay no pointer
+/// The macOS Dock, which DockPlus hides rather than kills: the same process draws the app switcher,
+/// Mission Control, Spaces and the wallpaper, so it has to stay running. Auto-hide with a delay no pointer
 /// will ever wait out keeps it alive and out of sight.
 @MainActor
 enum SystemDock {

@@ -1,10 +1,9 @@
 import AppKit
 import SwiftUI
 
-// The settings window's visual vocabulary, copied from Cmd-Tab's so the two apps' settings are
-// indistinguishable: a sidebar of tabs with gradient icon badges and a search field, and content
-// built from titled sections whose rows sit inside a rounded card. Cmd-Tab's localisation lookup
-// and colour control are left behind — DockPlus has nothing they serve.
+// The settings window's visual vocabulary, kept indistinguishable from the sibling apps' settings:
+// a sidebar of tabs with gradient icon badges and a search field, and content built from titled
+// sections whose rows sit inside a rounded card.
 
 enum SettingsChrome {
     static let cardCorner: CGFloat = 14
@@ -387,7 +386,7 @@ extension Color {
         return String(format: "#%02X%02X%02X", r, g, b)
     }
 
-    /// Parses `#RRGGBB` — how Cmd-Tab writes its badge gradients, kept so the values match exactly.
+    /// Parses `#RRGGBB`, the form the badge gradients are written in.
     init?(hex: String) {
         var s = hex
         if s.hasPrefix("#") { s.removeFirst() }

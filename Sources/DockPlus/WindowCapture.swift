@@ -12,8 +12,7 @@ struct WindowThumb: Identifiable, @unchecked Sendable {
     let image: CGImage
 }
 
-/// One-shot thumbnails of an app's windows, the way Cmd-Tab's WindowPreview.swift takes them —
-/// ScreenCaptureKit screenshots, never a stream. ScreenCaptureKit rather than Accessibility decides
+/// One-shot thumbnails of an app's windows — ScreenCaptureKit screenshots, never a stream. ScreenCaptureKit rather than Accessibility decides
 /// which windows exist: AX returns an empty list for Chromium and Electron apps (measured there).
 enum WindowCapture {
     @MainActor private static var hasAskedForPermission = false
@@ -39,7 +38,7 @@ enum WindowCapture {
         else { return [] }
         // The title filter is the one that matters: layer-0 debris — Chrome's dropdown surfaces,
         // Electron overlays — is untitled. `onScreenWindowsOnly: false` keeps windows on other
-        // Spaces and minimized ones, which capture real pixels (measured by Cmd-Tab, 15–60 ms each).
+        // Spaces and minimized ones, which capture real pixels (measured: 15–60 ms each).
         let axClaimed = axWindowIDs(pid: pid)
         let windows = content.windows.filter { window in
             guard window.owningApplication?.processID == pid, window.windowLayer == 0,
@@ -70,8 +69,7 @@ enum WindowCapture {
     /// In parallel, but back in the order given — front-to-back, for a pid's windows. A blank capture
     /// is no picture and is left out, which keeps a minimized tile on its app-icon fallback.
     private nonisolated static func captureAll(_ windows: [SCWindow], maxHeight: CGFloat) async -> [WindowThumb] {
-        // SCWindow is not Sendable; the wrapper only carries it into the child task, which is the
-        // pattern Cmd-Tab uses.
+        // SCWindow is not Sendable; the wrapper only carries it into the child task.
         struct Job: @unchecked Sendable {
             let index: Int
             let window: SCWindow
@@ -117,8 +115,8 @@ enum WindowCapture {
     /// Switches to the Desktop holding `windowID`, on whichever display that Desktop belongs to.
     /// Show-then-set-then-hide, not the write alone: `CGSManagedDisplaySetCurrentSpace` only
     /// re-points the window server's bookkeeping, and the screen keeps compositing the old Desktop —
-    /// Cmd-Tab chased that as "the window jumped to my Desktop and jumped back" before pairing the
-    /// write with CGSShowSpaces/CGSHideSpaces (its SpaceMover has the full account).
+    /// seen as "the window jumped to my Desktop and jumped back" until the write is paired with
+    /// CGSShowSpaces/CGSHideSpaces.
     @discardableResult
     nonisolated static func travelToSpace(of windowID: CGWindowID) -> Bool {
         guard let mainConnection, let copySpacesForWindows, let copyManaged,
@@ -197,8 +195,8 @@ enum WindowCapture {
 /// minimized-window restore already asks for; without it, raising falls back to activating the app.
 @MainActor
 enum WindowActions {
-    /// The only bridge from a CGWindowID to an AX element. Private, but stable enough that Cmd-Tab
-    /// ships on it; loaded once, and nil simply downgrades every raise to an app activation.
+    /// The only bridge from a CGWindowID to an AX element. Private but long-stable; loaded once,
+    /// and nil simply downgrades every raise to an app activation.
     typealias GetWindowFn = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
     /// Shared with WindowCapture's claims check; the symbol only needs loading once.
     nonisolated static let getWindowIDFn: GetWindowFn? = {
@@ -271,8 +269,8 @@ enum WindowActions {
 
     private static let setFront = SkyLight.symbol("_SLPSSetFrontProcessWithOptions", SetFrontFn.self)
     private static let postEvent = SkyLight.symbol("SLPSPostEventRecordTo", PostEventFn.self)
-    /// By path, not from the loaded images: Cmd-Tab measured that importing ApplicationServices does
-    /// not bring in the image that vends `GetProcessForPID`, leaving the whole path silently dead.
+    /// By path, not from the loaded images: importing ApplicationServices does not bring in the
+    /// image that vends `GetProcessForPID` (measured), leaving the whole path silently dead.
     private static let getProcessForPID: GetProcessForPIDFn? = {
         guard let handle = dlopen(
             "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY),
@@ -283,9 +281,9 @@ enum WindowActions {
 
     /// Brings one window forward. Activating the app is not enough here: an app with another window
     /// already visible — say on the second display — keeps focus on that one and never travels, which
-    /// was exactly the reported failure. So this fronts the *window* through the window server, the
-    /// way Cmd-Tab's FrontProcess does, after switching to its Desktop; app-level activation is only
-    /// the fallback when the private symbols are gone.
+    /// was exactly the reported failure. So this fronts the *window* through the window server
+    /// after switching to its Desktop; app-level activation is only the fallback when the private
+    /// symbols are gone.
     static func raise(_ windowID: CGWindowID, pid: pid_t) {
         let app = NSRunningApplication(processIdentifier: pid)
         let axWindow = element(for: windowID, pid: pid)

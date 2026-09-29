@@ -59,7 +59,7 @@ struct GeneralPane: View {
             ) {
                 SettingsToggle(
                     title: "Hide the macOS Dock",
-                    subtitle: "It keeps running for Cmd-Tab, Mission Control and Spaces — just out of sight.",
+                    subtitle: "It keeps running for the app switcher, Mission Control and Spaces — just out of sight.",
                     isOn: $settings.hidesSystemDock)
             }
             SettingsSection(
