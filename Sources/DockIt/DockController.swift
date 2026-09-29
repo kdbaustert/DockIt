@@ -36,6 +36,8 @@ final class DockController {
     private var monitors: [Any] = []
     private var lastMouse: NSPoint?
     private var stillTicks = 0
+    /// When the button came up during a drag from the bar; see `trackDrag`.
+    private var dragReleasedAt: Date?
     /// Display asleep or another user's session in front: nothing to see, so nothing runs.
     private var isPaused = false
     /// Whether another app's window reaches into the resting bar, as last checked; only consulted
@@ -258,7 +260,10 @@ final class DockController {
         updateAutoHide(onEdge: onEdge && alongBar, across: across, overBar: overBar)
 
         let hoveredIndex = overBar ? layout.index(at: along) : nil
-        let hoveredItem = hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
+        if model.drag != nil { trackDrag(over: hoveredIndex) }
+        // Nothing is hovered while an icon is carried: no preview, and no name over the gap.
+        let hoveredItem = model.drag != nil ? nil
+            : hoveredIndex.flatMap { $0 < model.items.count ? model.items[$0] : nil }
         hoveredItemID = hoveredItem?.id
         // The pointer still rests on the icon while its menu is open; without this the dwell runs
         // out under the menu and the preview comes straight back. A stack's grid stands where the
@@ -324,7 +329,24 @@ final class DockController {
     private func canIdle() -> Bool {
         stillTicks >= Self.idleAfterStillTicks && NSEvent.pressedMouseButtons == 0
             && leftBarAt == nil && edgeHeldAt == nil && openMenus == 0 && !previews.isActive
-            && state.pointer == nil
+            && state.pointer == nil && model.drag == nil
+    }
+
+    /// A drag from the bar: the gap follows the pointer along it. SwiftUI reports no end to a drag,
+    /// only a drop, so a release anywhere else is read here and puts the icon back — after a moment's
+    /// grace, because a drop on the bar is delivered just after the button comes up, and ending the
+    /// drag first would lose where it was dropped.
+    private func trackDrag(over index: Int?) {
+        guard NSEvent.pressedMouseButtons == 0 else {
+            dragReleasedAt = nil
+            withAnimation(.smooth(duration: 0.2)) { model.moveDrag(over: index) }
+            return
+        }
+        let released = dragReleasedAt ?? .now
+        dragReleasedAt = released
+        guard Date.now.timeIntervalSince(released) > 0.3 else { return }
+        dragReleasedAt = nil
+        withAnimation(.smooth(duration: 0.25)) { model.endDrag() }
     }
 
     /// The timer stops and the first mouse event of any kind starts it again. The monitors are

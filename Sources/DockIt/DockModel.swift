@@ -90,7 +90,16 @@ final class DockModel {
     nonisolated static let finderPath = "/System/Library/CoreServices/Finder.app"
     nonisolated static let finderID = key(URL(fileURLWithPath: finderPath))
 
+    /// What the bar shows: the built items, rearranged while an icon is dragged along it.
     private(set) var items: [DockItem] = []
+    /// The items as the settings and running apps make them, before a drag rearranges them.
+    @ObservationIgnored var builtItems: [DockItem] = []
+    /// An icon being dragged along the bar, and where its gap is. See DockModel+DragDrop.swift.
+    var drag: DockDrag? { didSet { showItems() } }
+    /// Where each unpinned running app stands among the pinned ones: the id of the item it follows,
+    /// "" for first. Only for apps a drop has placed; the rest come after the pinned apps. Kept for
+    /// this run only, and only while the app runs — it has no place to come back to once it quits.
+    @ObservationIgnored var runningAnchors: [String: String] = [:]
     private(set) var trashIsFull = false
     // The sweeps' results, and their in-flight flags below, are not `private`: the sweeps that set
     // them live in DockModel+Sweeps.swift, and Swift has no access level for "this type, any file".
@@ -297,6 +306,13 @@ final class DockModel {
 
     // MARK: - Items
 
+    /// Publishes the built items with the drag applied. Called for either changing; here rather than
+    /// beside the drag because only this file may set `items`.
+    func showItems() {
+        let shown = Self.arranged(builtItems, drag: drag)
+        if shown != items { items = shown }
+    }
+
     /// Every running process with its activation policy — in-memory reads only, no disk.
     private static func runningSignature(_ apps: [NSRunningApplication]) -> [pid_t: Int] {
         Dictionary(apps.map { ($0.processIdentifier, $0.activationPolicy.rawValue) }) { first, _ in first }
@@ -343,6 +359,7 @@ final class DockModel {
             running: running.map(RunningApp.init), recent: settings.showsRecentApps ? settings.recentApps : [],
             minimized: minimizedWindows,
             widgetOrder: settings.widgetOrder, enabledWidgets: enabledWidgets, edge: settings.edge,
+            anchors: runningAnchors,
             fileExists: { FileManager.default.fileExists(atPath: $0) },
             isFolder: { path in
                 var isDirectory: ObjCBool = false
@@ -355,7 +372,11 @@ final class DockModel {
             if let icon = app.icon { icons[RunningApp(app).id] = icon }
         }
 
-        if result != items { items = result }
+        builtItems = result
+        showItems()
+        // An app that quit loses its place: it comes back at the end, as in the macOS Dock.
+        let runningIDs = Set(running.map { RunningApp($0).id })
+        runningAnchors = runningAnchors.filter { runningIDs.contains($0.key) }
         // Only what is on the bar: apps come and go all day, and an app with no bundle gets a new
         // "pid:" key at every launch, so the cache otherwise only ever grew.
         let onBar = Set(result.flatMap { [$0.id] + $0.apps.map(\.id) })
@@ -380,6 +401,7 @@ final class DockModel {
     nonisolated static func items(
         pinned: [String], hidden: [String], stacks: [String], running: [RunningApp], recent: [String],
         minimized: [MinimizedWindow], widgetOrder: [String], enabledWidgets: Set<String>, edge: DockEdge,
+        anchors: [String: String] = [:],
         fileExists: (String) -> Bool, isFolder: (String) -> Bool, displayName: (String) -> String
     ) -> [DockItem] {
         var runningByID: [String: RunningApp] = [:]
@@ -391,7 +413,9 @@ final class DockModel {
         // Hidden apps start out "seen", so both loops below skip them, pinned or running.
         var seen = Set(hidden.map { key(URL(fileURLWithPath: $0)) })
         seen.remove(finderID)
-        for path in [finderPath] + pinned {
+        // Finder is first unless it has been moved, which writes it into the pinned list.
+        let namesFinder = pinned.contains { !$0.hasPrefix(spacerPrefix) && key(URL(fileURLWithPath: $0)) == finderID }
+        for path in namesFinder ? pinned : [finderPath] + pinned {
             if path.hasPrefix(spacerPrefix) {
                 result.append(DockItem(id: path, kind: .spacer, url: nil, name: "", isPinned: true, isRunning: false, pid: nil))
                 continue
@@ -419,6 +443,11 @@ final class DockModel {
             )
             if collects {
                 collected.append(item)
+            } else if let anchor = anchors[id] {
+                // After the item it follows, and after any running app already placed behind it.
+                var index = anchor.isEmpty ? 0 : (result.firstIndex { $0.id == anchor }.map { $0 + 1 } ?? result.count)
+                while index < result.count, !result[index].isPinned { index += 1 }
+                result.insert(item, at: index)
             } else {
                 result.append(item)
             }

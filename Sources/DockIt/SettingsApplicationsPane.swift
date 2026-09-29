@@ -6,12 +6,15 @@ struct ApplicationsPane: View {
 
     var body: some View {
         // Spacers and dividers share `pinnedApps` but are managed from the dock and Widgets ▸ Layout; listed
-        // here they would be rows with no icon and a meaningless "spacer:<uuid>" path.
-        let apps = settings.pinnedApps.filter { !$0.hasPrefix(spacerPrefix) }
+        // here they would be rows with no icon and a meaningless "spacer:<uuid>" path. Finder is in
+        // the list once it has been moved, and is left out here too: it cannot be removed.
+        let apps = settings.pinnedApps.filter {
+            !$0.hasPrefix(spacerPrefix) && DockModel.key(URL(fileURLWithPath: $0)) != DockModel.finderID
+        }
         SettingsPage(title: "Applications", subtitle: "Drag icons in the dock to reorder them, or drop apps onto it.") {
             SettingsSection(
                 title: "Pinned apps", anchor: SettingsAnchor.pinned,
-                footer: "Finder is always first and cannot be removed."
+                footer: "Finder is always in the dock and cannot be removed."
             ) {
                 if apps.isEmpty {
                     SettingsWideRow(subtitle: "No pinned apps.") { EmptyView() }
@@ -51,7 +54,7 @@ struct ApplicationsPane: View {
 
     /// Pins the chosen apps at the end of the dock, in the order picked. Compared the way the dock
     /// compares them (symlinks resolved), so an app already pinned by another path is not added twice,
-    /// and Finder — always first — is never added at all.
+    /// and Finder — always in the dock — is never added at all.
     private func addApplications() {
         guard let urls = chooseApplications(prompt: "Add") else { return }
         var seen = Set(settings.pinnedApps.map { DockModel.key(URL(fileURLWithPath: $0)) } + [DockModel.finderID])

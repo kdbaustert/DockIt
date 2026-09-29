@@ -20,11 +20,11 @@ final class DockModelItemsTests: XCTestCase {
         pinned: [String] = [], hidden: [String] = [], stacks: [String] = [],
         running: [DockModel.RunningApp] = [], recent: [String] = [], minimized: [MinimizedWindow] = [],
         widgetOrder: [String] = canonicalWidgetOrder, enabledWidgets: Set<String> = [], edge: DockEdge = .bottom,
-        missing: Set<String> = [], folders: Set<String> = []
+        anchors: [String: String] = [:], missing: Set<String> = [], folders: Set<String> = []
     ) -> [DockItem] {
         DockModel.items(
             pinned: pinned, hidden: hidden, stacks: stacks, running: running, recent: recent, minimized: minimized,
-            widgetOrder: widgetOrder, enabledWidgets: enabledWidgets, edge: edge,
+            widgetOrder: widgetOrder, enabledWidgets: enabledWidgets, edge: edge, anchors: anchors,
             fileExists: { !missing.contains($0) }, isFolder: { folders.contains($0) },
             displayName: { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent })
     }
@@ -109,6 +109,22 @@ final class DockModelItemsTests: XCTestCase {
     func testRunningAppsStayOnASideDock() {
         let list = items(running: [running(mail, pid: 2)], enabledWidgets: ["runningApps"], edge: .left)
         XCTAssertEqual(list.map(\.id), [DockModel.finderID, id(mail), "separator", "trash"])
+    }
+
+    /// A moved Finder is written into the pinned list, and stands where it was put.
+    func testMovedFinderStandsWhereItWasPut() {
+        let list = items(pinned: [safari, DockModel.finderPath, mail])
+        XCTAssertEqual(list.map(\.id), [id(safari), DockModel.finderID, id(mail), "separator", "trash"])
+    }
+
+    /// A running app with a place stands there; one without comes after the pinned apps.
+    func testAnchoredRunningAppStandsAfterItsPinnedItem() {
+        let list = items(
+            pinned: [safari, mail], running: [running(notes, pid: 3), running("/Applications/Maps.app", pid: 4)],
+            anchors: [id(notes): id(safari)])
+        XCTAssertEqual(list.map(\.id), [
+            DockModel.finderID, id(safari), id(notes), id(mail), id("/Applications/Maps.app"), "separator", "trash",
+        ])
     }
 
     func testStacksAreFoldersOnlyAndEachOnce() {

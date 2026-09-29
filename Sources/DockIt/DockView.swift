@@ -8,7 +8,8 @@ struct DockView: View {
     var body: some View {
         let layout = model.layout(for: state)
         let metrics = layout.metrics
-        let hovered = state.pointer.flatMap(layout.index(at:))
+        // No highlight or name while an icon is carried: the pointer is over its gap.
+        let hovered = model.drag == nil ? state.pointer.flatMap(layout.index(at:)) : nil
         let edge = settings.edge
         let horizontal = edge == .bottom
         let row = horizontal
@@ -45,40 +46,44 @@ struct DockView: View {
             row {
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
                     let size = index < layout.sizes.count ? layout.sizes[index] : metrics.iconSize
-                    switch item.kind {
-                    case .separator:
-                        SeparatorView(extent: size, iconSize: metrics.iconSize, horizontal: horizontal)
-                    case .spacer:
-                        SpacerTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
-                    case .minimizedWindow:
-                        MinimizedTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
-                    case .nowPlaying:
-                        NowPlayingTile(width: size, height: metrics.iconSize)
-                            .onDrag { model.dragPayload(for: item) }
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .weather:
-                        WeatherTile(width: size, height: metrics.iconSize)
-                            .onDrag { model.dragPayload(for: item) }
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .clock:
-                        ClockTile(width: size, height: metrics.iconSize)
-                            .onDrag { model.dragPayload(for: item) }
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .battery:
-                        BatteryTile(width: size, height: metrics.iconSize)
-                            .onDrag { model.dragPayload(for: item) }
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .calendar:
-                        CalendarTile(width: size, height: metrics.iconSize)
-                            .onDrag { model.dragPayload(for: item) }
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .runningApps:
-                        // No drag of the tile itself: each icon in it drags its own app.
-                        RunningAppsTile(apps: item.apps, width: size, height: metrics.iconSize, model: model)
-                            .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
-                    case .app, .folder, .trash:
-                        DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
+                    Group {
+                        switch item.kind {
+                        case .separator:
+                            SeparatorView(extent: size, iconSize: metrics.iconSize, horizontal: horizontal)
+                        case .spacer:
+                            SpacerTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
+                        case .minimizedWindow:
+                            MinimizedTile(item: item, extent: size, iconSize: metrics.iconSize, horizontal: horizontal, model: model)
+                        case .nowPlaying:
+                            NowPlayingTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .weather:
+                            WeatherTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .clock:
+                            ClockTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .battery:
+                            BatteryTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .calendar:
+                            CalendarTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .runningApps:
+                            // No drag of the tile itself: each icon in it drags its own app.
+                            RunningAppsTile(apps: item.apps, width: size, height: metrics.iconSize, model: model)
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .app, .folder, .trash:
+                            DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
+                        }
                     }
+                    // The carried icon's slot is its gap: there, holding the space, but empty.
+                    .opacity(model.drag?.id == item.id ? 0 : 1)
                 }
             }
             .padding(edge.alongStart, layout.start + metrics.padding)
@@ -126,7 +131,8 @@ private struct DockIcon: View {
                     LinearKeyframe(0, duration: 0.3, timingCurve: .easeIn)
                 }
             }
-            .brightness(isTargeted ? 0.15 : 0)
+            // Lit for a file dropped on the app, not for an icon passing over while being reordered.
+            .brightness(isTargeted && model.drag == nil ? 0.15 : 0)
             .shadow(color: .black.opacity(model.settings.iconShadows ? 0.35 : 0), radius: 3, y: 1)
             .overlay(alignment: edge.dotAlignment) {
                 if model.settings.showsRunningDots, item.isRunning, item.kind == .app {
@@ -161,7 +167,14 @@ private struct DockIcon: View {
                 Divider()
                 DockMenuFooter()
             }
-            .onDrag { model.dragPayload(for: item) }
+            // The icon alone, at its size: the default picture was the whole view, hover highlight and
+            // name label included.
+            .onDrag { model.dragPayload(for: item) } preview: {
+                Image(nsImage: model.icon(for: item))
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: size, height: size)
+            }
             .onDrop(of: DockModel.dropTypes, isTargeted: $isTargeted) { model.handleDrop($0, onto: item) }
             // One element per icon, read by its name: the hover label and the badge are drawn
             // children, and would otherwise be read out as separate items.
