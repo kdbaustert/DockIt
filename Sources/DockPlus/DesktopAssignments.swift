@@ -3,9 +3,10 @@ import AppKit
 /// The macOS Dock's Options ▸ Assign To: which Desktop (Space) an app's windows open on.
 ///
 /// macOS keeps the answer in `com.apple.spaces` under `app-bindings` — lowercased bundle identifier
-/// to Space UUID, `AllSpaces` for All Desktops, and no entry for None. An empty string was read as
-/// All Desktops once; on macOS 27.2 the Dock writes `AllSpaces` and ignored an empty one, keeping its
-/// old Desktop (measured 2026-09-30). Both still read as All Desktops, since older bindings hold "".
+/// to Space UUID, `AllSpaces` for All Desktops, and no entry for None. An empty string is not All
+/// Desktops: it is the UUID of the one Desktop that has none, and the Dock ticks that Desktop for it
+/// (measured 2026-09-30 on macOS 27.2: Finder and GitHub Desktop, bound "", ticked Desktop 4 — the
+/// Desktop with the empty UUID — in the Dock's own menu).
 ///
 /// A choice is made by picking the same item in the hidden macOS Dock's own menu, over
 /// Accessibility: the Dock owns Spaces, and only it moves the app's open windows at once. Writing
@@ -18,7 +19,7 @@ enum DesktopAssignments {
     enum Assignment: Equatable, Sendable {
         case none
         case allDesktops
-        /// One Desktop, by its Space UUID. Never empty: an empty binding means All Desktops.
+        /// One Desktop, by its Space UUID — empty for the Desktop that has none.
         case desktop(String)
     }
 
@@ -43,7 +44,7 @@ enum DesktopAssignments {
 
     nonisolated static func assignment(of bundleID: String) -> Assignment {
         guard let uuid = bindings()[bundleID.lowercased()] else { return .none }
-        return uuid.isEmpty || uuid == allSpaces ? .allDesktops : .desktop(uuid)
+        return uuid == allSpaces ? .allDesktops : .desktop(uuid)
     }
 
     /// The Desktop items between All Desktops and None, read from the Space layout now. `pid` is the
@@ -61,10 +62,9 @@ enum DesktopAssignments {
     /// ticked and inert, so the tick is not lost. Several displays means "Displays have separate
     /// Spaces" is on; with it off the window server lists one.
     ///
-    /// A Desktop can carry an empty UUID — measured 2026-09-28: Desktop 4 of this machine's display
-    /// does — and an empty binding already means All Desktops (confirmed against a Messages binding
-    /// set in the real Dock). Such a Desktop is offered disabled rather than silently saving All
-    /// Desktops. Pure, for the tests.
+    /// A Desktop can carry an empty UUID — Desktop 4 of this machine's display does — and is offered
+    /// like any other: the Dock saves "" for it and honours that. With no Desktop known to be in
+    /// front, none is offered for that display. Pure, for the tests.
     nonisolated static func desktopOptions(
         displays: [Display], current: Assignment, appDesktops: Set<String> = []
     ) -> [Option] {
@@ -74,11 +74,11 @@ enum DesktopAssignments {
         for (index, display) in displays.enumerated() {
             let suffix = several ? " on Display \(index + 1)" : ""
             let frontTitle = several ? "Desktop" + suffix : "This Desktop"
-            let front = display.current.flatMap { $0.isEmpty ? nil : $0 }
-            let appHere = display.desktops.filter { !$0.isEmpty && appDesktops.contains($0) }
-            if appHere.isEmpty {
-                options.append(Option(title: frontTitle, assignment: .desktop(front ?? ""), isEnabled: front != nil))
-                if let front { listed.insert(front) }
+            let front = display.current
+            let appHere = display.desktops.filter { appDesktops.contains($0) }
+            if appHere.isEmpty, let front {
+                options.append(Option(title: frontTitle, assignment: .desktop(front)))
+                listed.insert(front)
             }
             for (number, uuid) in display.desktops.enumerated() where appHere.contains(uuid) {
                 options.append(Option(title: uuid == front ? frontTitle : "Desktop \(number + 1)" + suffix,
@@ -175,7 +175,6 @@ enum DesktopAssignments {
         case .allDesktops:
             all[id] = allSpaces
         case .desktop(let uuid):
-            guard !uuid.isEmpty else { return }
             all[id] = uuid
         }
         // Nothing changed, so there is nothing for the Dock to reread; restarting it would only flash.

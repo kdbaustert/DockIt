@@ -85,13 +85,24 @@ final class DesktopAssignmentsTests: XCTestCase {
             [Option(title: "Desktop 2", assignment: .desktop("b"))])
     }
 
-    /// An empty UUID would save as All Desktops, so a Desktop that has one cannot be picked.
-    func testADesktopWithNoUUIDIsDisabled() {
+    /// The Desktop with an empty UUID is a Desktop like any other: in front it is This Desktop,
+    /// bound from elsewhere it goes by its number, and a window on it offers it.
+    func testADesktopWithNoUUIDCanBePicked() {
         XCTAssertEqual(
             DesktopAssignments.desktopOptions(displays: [display("", ["a", ""])], current: .none),
-            [Option(title: "This Desktop", assignment: .desktop(""), isEnabled: false)])
+            [Option(title: "This Desktop", assignment: .desktop(""))])
         XCTAssertEqual(
-            DesktopAssignments.desktopOptions(displays: [display(nil, [])], current: .none),
-            [Option(title: "This Desktop", assignment: .desktop(""), isEnabled: false)])
+            DesktopAssignments.desktopOptions(displays: [display("a", ["a", ""])], current: .desktop("")),
+            [Option(title: "This Desktop", assignment: .desktop("a")),
+             Option(title: "Desktop 2", assignment: .desktop(""))])
+        XCTAssertEqual(
+            DesktopAssignments.desktopOptions(
+                displays: [display("a", ["a", ""])], current: .none, appDesktops: [""]),
+            [Option(title: "Desktop 2", assignment: .desktop(""))])
+    }
+
+    /// No Desktop known to be in front: nothing to offer as This Desktop.
+    func testNoFrontDesktopOffersNone() {
+        XCTAssertEqual(DesktopAssignments.desktopOptions(displays: [display(nil, ["a"])], current: .none), [])
     }
 }
