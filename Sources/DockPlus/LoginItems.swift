@@ -42,14 +42,27 @@ enum LoginItems {
         return item(for: app, in: list) != nil
     }
 
+    /// A failure is logged, not shown: the menu is closed by then, and reopening it reads the list
+    /// again, so its tick already tells the truth.
     static func setOpensAtLogin(_ app: URL, _ on: Bool) {
-        guard let list = sessionList() else { return }
+        guard let list = sessionList() else {
+            NSLog("DockPlus: the login items list is unavailable; \(app.lastPathComponent) left as it was")
+            return
+        }
         let existing = item(for: app, in: list)
         if on {
-            guard existing == nil, let insert, let atEnd else { return }
-            _ = insert(list, atEnd, nil, nil, app as CFURL, nil, nil)?.takeRetainedValue()
-        } else if let existing, let remove {
-            _ = remove(list, existing)
+            guard existing == nil else { return }
+            guard let insert, let atEnd,
+                  insert(list, atEnd, nil, nil, app as CFURL, nil, nil)?.takeRetainedValue() != nil
+            else {
+                NSLog("DockPlus: could not add \(app.lastPathComponent) to the login items")
+                return
+            }
+        } else if let existing {
+            let status = remove.map { $0(list, existing) }
+            if status != 0 {
+                NSLog("DockPlus: could not remove \(app.lastPathComponent) from the login items: \(status.map(String.init) ?? "no symbol")")
+            }
         }
     }
 

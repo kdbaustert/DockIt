@@ -85,12 +85,13 @@ extension DockModel {
         guard let item = drag.flatMap({ current in builtItems.first { $0.id == current.id } }),
               Self.isRemovableByDrag(item)
         else { return false }
-        drag = nil
         if item.id.hasPrefix(Self.widgetIDPrefix) {
             guard let isOn = DockSettings.widgetSwitches[String(item.id.dropFirst(Self.widgetIDPrefix.count))]
             else { return false }
+            drag = nil
             settings[keyPath: isOn] = false
         } else {
+            drag = nil
             unpin(item)
         }
         return true
@@ -277,31 +278,44 @@ extension DockModel {
         return true
     }
 
-    /// A mounted volume other than the startup disk, which cannot be ejected.
+    /// A mounted volume other than the startup disk, which cannot be ejected, and other than the
+    /// system's hidden ones — Preboot, VM, Update and the like are volumes too, and only
+    /// browsability tells them apart (measured on macOS 27.2; the Data volume reads as the root).
     nonisolated static func isEjectableVolume(_ url: URL) -> Bool {
-        guard let values = try? url.resourceValues(forKeys: [.isVolumeKey, .volumeIsRootFileSystemKey]) else {
-            return false
-        }
-        return values.isVolume == true && values.volumeIsRootFileSystem != true
+        guard let values = try? url.resourceValues(
+            forKeys: [.isVolumeKey, .volumeIsRootFileSystemKey, .volumeIsBrowsableKey])
+        else { return false }
+        return values.isVolume == true && values.volumeIsRootFileSystem != true && values.volumeIsBrowsable == true
     }
 
     /// Off the main thread: the unmount waits for the disk to flush, which can take seconds, and the
     /// dock would stop tracking the pointer meanwhile. A disk in use stays mounted, and says so, as
-    /// Finder does — otherwise the drop would look like it did nothing.
-    private func eject(_ volume: URL) {
+    /// Finder does — otherwise the drop would look like it did nothing. Several disks go one after
+    /// another and fail in one alert: an alert each opened one modal on top of the last.
+    private func eject(_ volumes: [URL]) {
+        guard !volumes.isEmpty else { return }
         Task.detached {
-            do {
-                try NSWorkspace.shared.unmountAndEjectDevice(at: volume)
-            } catch {
-                await MainActor.run { Self.explainEjectFailed(volume, error) }
+            var failed: [(URL, Error)] = []
+            for volume in volumes {
+                do {
+                    try NSWorkspace.shared.unmountAndEjectDevice(at: volume)
+                } catch {
+                    failed.append((volume, error))
+                }
             }
+            guard !failed.isEmpty else { return }
+            await MainActor.run { Self.explainEjectFailed(failed) }
         }
     }
 
-    private static func explainEjectFailed(_ volume: URL, _ error: Error) {
+    private static func explainEjectFailed(_ failed: [(URL, Error)]) {
+        let names = failed.map { "“\(FileManager.default.displayName(atPath: $0.0.path))”" }
         let alert = NSAlert()
-        alert.messageText = "DockPlus couldn't eject “\(FileManager.default.displayName(atPath: volume.path))”"
-        alert.informativeText = error.localizedDescription
+        alert.messageText = "DockPlus couldn't eject \(names.formatted())"
+        var seen = Set<String>()
+        alert.informativeText = failed.map { $0.1.localizedDescription }
+            .filter { seen.insert($0).inserted }
+            .joined(separator: "\n")
         // DockPlus is a background app; without this the alert can open behind other windows.
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -318,7 +332,7 @@ extension DockModel {
         if target?.kind == .trash {
             // A disk dropped on the Trash is ejected, as in the macOS Dock; recycling one only fails.
             let volumes = urls.filter(Self.isEjectableVolume)
-            for volume in volumes { eject(volume) }
+            eject(volumes)
             let files = urls.filter { !volumes.contains($0) }
             guard !files.isEmpty else { return }
             NSWorkspace.shared.recycle(files) { [weak self] _, _ in

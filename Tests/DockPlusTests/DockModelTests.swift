@@ -89,6 +89,8 @@ final class DockModelTests: XCTestCase {
     /// The startup disk and ordinary folders go to the Trash's recycling, never to an eject.
     func testOnlyMountedVolumesOtherThanTheStartupDiskEject() {
         XCTAssertFalse(DockModel.isEjectableVolume(URL(fileURLWithPath: "/")))
+        // A volume, and not the root, but one of the system's hidden ones.
+        XCTAssertFalse(DockModel.isEjectableVolume(URL(fileURLWithPath: "/System/Volumes/VM")))
         XCTAssertFalse(DockModel.isEjectableVolume(FileManager.default.temporaryDirectory))
         XCTAssertFalse(DockModel.isEjectableVolume(URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)")))
     }

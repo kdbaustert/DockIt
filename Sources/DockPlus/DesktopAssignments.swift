@@ -37,11 +37,11 @@ enum DesktopAssignments {
         var isEnabled = true
     }
 
-    private static let domain = "com.apple.spaces" as CFString
-    private static let key = "app-bindings" as CFString
-    private static let allSpaces = "AllSpaces"
+    private nonisolated static let domain = "com.apple.spaces"
+    private nonisolated static let key = "app-bindings"
+    private nonisolated static let allSpaces = "AllSpaces"
 
-    static func assignment(of bundleID: String) -> Assignment {
+    nonisolated static func assignment(of bundleID: String) -> Assignment {
         guard let uuid = bindings()[bundleID.lowercased()] else { return .none }
         return uuid.isEmpty || uuid == allSpaces ? .allDesktops : .desktop(uuid)
     }
@@ -98,7 +98,8 @@ enum DesktopAssignments {
     }
 
     /// Picks `title` for the app at `app` in the Dock's menu, or writes `target` when the Dock's menu
-    /// has no such item. Off the main thread: the Dock's menu takes a moment to open.
+    /// has no such item — or has one that, pressed, did not save `target`. Off the main thread: the
+    /// Dock's menu takes a moment to open.
     static func assign(_ bundleID: String, to target: Assignment, title: String, app: URL) {
         guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
               AXIsProcessTrusted()
@@ -108,13 +109,27 @@ enum DesktopAssignments {
         }
         let pid = dock.processIdentifier
         pressQueue.async {
-            guard !pressDockMenuItem(title, for: app, dockPID: pid) else { return }
-            DispatchQueue.main.async { MainActor.assumeIsolated { write(bundleID, target) } }
+            guard !(pressDockMenuItem(title, for: app, dockPID: pid) && awaitBinding(bundleID, target)) else { return }
+            // Sync, so the next pick waits for this one's write: queued after it instead, an earlier
+            // pick's write could land after a later pick and undo it.
+            DispatchQueue.main.sync { MainActor.assumeIsolated { write(bundleID, target) } }
         }
     }
 
     /// One pick at a time: two menus of the Dock's open at once would each close the other.
     private nonisolated static let pressQueue = DispatchQueue(label: "dev.kennyb.dockplus.assign", qos: .userInitiated)
+
+    /// Whether the Dock saved `target` after a press. An accepted press is not a done one: the Dock
+    /// can ignore it, or a title it words the same can mean another Desktop. It saves within about
+    /// 1 ms of the press (measured 2026-09-30, All Desktops, This Desktop and None alike); half a
+    /// second is the margin for a busy Dock.
+    private nonisolated static func awaitBinding(_ bundleID: String, _ target: Assignment) -> Bool {
+        for _ in 0..<50 {
+            if assignment(of: bundleID) == target { return true }
+            usleep(10_000)
+        }
+        return false
+    }
 
     /// Opens the Dock's menu for the app's tile and presses `title` in its Options — without opening
     /// that submenu, which the Dock does not need (measured). Closes the menu if the item is missing.
@@ -165,14 +180,14 @@ enum DesktopAssignments {
         }
         // Nothing changed, so there is nothing for the Dock to reread; restarting it would only flash.
         guard all != before else { return }
-        CFPreferencesSetAppValue(key, all as CFDictionary, domain)
-        CFPreferencesAppSynchronize(domain)
+        CFPreferencesSetAppValue(key as CFString, all as CFDictionary, domain as CFString)
+        CFPreferencesAppSynchronize(domain as CFString)
         SystemDock.restartDock()
     }
 
-    private static func bindings() -> [String: String] {
-        CFPreferencesAppSynchronize(domain)
-        return CFPreferencesCopyAppValue(key, domain) as? [String: String] ?? [:]
+    private nonisolated static func bindings() -> [String: String] {
+        CFPreferencesAppSynchronize(domain as CFString)
+        return CFPreferencesCopyAppValue(key as CFString, domain as CFString) as? [String: String] ?? [:]
     }
 }
 

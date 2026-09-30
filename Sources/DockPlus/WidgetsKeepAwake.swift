@@ -27,7 +27,11 @@ extension WidgetsModel {
             let result = IOPMAssertionCreateWithName(
                 kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
                 IOPMAssertionLevel(kIOPMAssertionLevelOn), "DockPlus Keep Awake widget" as CFString, &id)
-            guard result == kIOReturnSuccess else { return }
+            // The tile stays off, which is the truth; the log says why.
+            guard result == kIOReturnSuccess else {
+                NSLog("DockPlus: could not keep the Mac awake: IOPMAssertionCreateWithName returned \(result)")
+                return
+            }
             keepAwakeAssertion = id
         }
         isKeepingAwake = true
