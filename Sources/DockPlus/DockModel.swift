@@ -124,6 +124,13 @@ final class DockModel {
     /// the icon is.
     @ObservationIgnored var showStackGrid: ((DockItem) -> Bool)?
     @ObservationIgnored private var icons: [String: NSImage] = [:]
+    /// Bumped when a cached icon is dropped, so the tiles redraw and refetch. `icon(for:)` reads it,
+    /// and the tiles call that from their bodies, which registers the dependency; the cache itself
+    /// stays unobserved because `icon(for:)` also fills it mid-render.
+    private var iconsVersion = 0
+    /// Each app tile's bundle modification date at the last icon sweep, by item id.
+    @ObservationIgnored private var iconStamps: [String: Date] = [:]
+    @ObservationIgnored private var isSweepingIcons = false
 
     /// The longest an icon bounces. An app that never reports finishing its launch — one that hangs,
     /// or is stopped by Gatekeeper — would otherwise bounce forever.
@@ -189,6 +196,9 @@ final class DockModel {
         }
         rebuild()
         refreshTrash()
+        // The baseline right away, not at the first beat: an icon updated in the first six seconds
+        // would otherwise be compared against a date that was never taken.
+        refreshIcons()
         trackItems()
         // Minimized windows: a full sweep whenever the frontmost app changes, and on the timer below
         // the frontmost app each beat and every app each 15th (30 s). Asking every app each beat was a
@@ -226,6 +236,7 @@ final class DockModel {
                 if self.maintenanceBeats % 3 == 0 {
                     self.rebuildIfRunningAppsChanged()
                     self.refreshBadges()
+                    self.refreshIcons()
                 }
             }
         }
@@ -248,6 +259,7 @@ final class DockModel {
         refreshTrash()
         refreshMinimizedWindows()
         refreshBadges()
+        refreshIcons()
     }
 
     /// Rebuilds whenever the pinned apps or stacks change, whether the dock itself changed them or
@@ -521,6 +533,9 @@ final class DockModel {
     }
 
     func icon(for item: DockItem) -> NSImage {
+        // Read for the dependency alone: when the icon sweep drops a stale entry and bumps the
+        // version, every tile asks again and the dropped ones refetch.
+        _ = iconsVersion
         if item.kind == .trash {
             return NSImage(named: trashIsFull ? NSImage.trashFullName : NSImage.trashEmptyName) ?? NSImage()
         }
@@ -548,6 +563,48 @@ final class DockModel {
         if stat(Self.trashURL.path + "/.DS_Store", &dsStore) == 0 { items -= 1 }
         let full = items > 0
         if full != trashIsFull { trashIsFull = full }
+    }
+
+    /// Nothing announces an app's icon changing on disk — an update swaps the whole bundle, a custom
+    /// icon from Get Info plants an icon file inside it — but either moves the bundle's modification
+    /// date. So this stats each app tile's bundle, off the main thread in case one lives on a dead
+    /// network volume, and drops the cached icon of any whose date moved since the last sweep.
+    /// Apps only: a folder's date moves whenever its contents do, which would redraw the bar all day.
+    /// (An icon repainted only in a running app's memory announces nothing macOS lets us hear —
+    /// `NSRunningApplication.icon` is not KVO-observable — so that still shows the disk icon.)
+    func refreshIcons() {
+        guard !isSweepingIcons else { return }
+        isSweepingIcons = true
+        let paths = builtItems.flatMap { [$0] + $0.apps }.compactMap { item in
+            item.kind == .app ? item.url.map { (item.id, $0.path) } : nil
+        }
+        let known = iconStamps
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var stamps: [String: Date] = [:]
+            for (id, path) in paths {
+                var info = stat()
+                guard stat(path, &info) == 0 else { continue }
+                stamps[id] = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                    + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isSweepingIcons = false
+                    self.iconStamps = stamps
+                    var dropped = false
+                    for id in Self.changedIcons(old: known, new: stamps)
+                    where self.icons.removeValue(forKey: id) != nil { dropped = true }
+                    if dropped { self.iconsVersion += 1 }
+                }
+            }
+        }
+    }
+
+    /// The ids whose modification date moved between sweeps. An id seen for the first time has not
+    /// changed — that sweep only takes its baseline. Pure, for the tests.
+    nonisolated static func changedIcons(old: [String: Date], new: [String: Date]) -> Set<String> {
+        Set(new.filter { id, date in old[id].map { $0 != date } ?? false }.map(\.key))
     }
 
     // MARK: - Actions

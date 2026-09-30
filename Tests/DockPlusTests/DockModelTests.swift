@@ -160,4 +160,17 @@ final class DockModelTests: XCTestCase {
         ])
         XCTAssertEqual(badges, [app(mail).id: "3"])
     }
+
+    // MARK: - icon sweep
+
+    func testChangedIconsOnlyForMovedDates() {
+        let then = Date(timeIntervalSince1970: 100)
+        let now = Date(timeIntervalSince1970: 200)
+        let changed = DockModel.changedIcons(
+            old: [mail: then, safari: then, notes: then],
+            // Mail updated; Safari untouched; Notes gone from the bar; TextEdit new, so its first
+            // sweep is a baseline, not a change.
+            new: [mail: now, safari: then, "/Applications/TextEdit.app": now])
+        XCTAssertEqual(changed, [mail])
+    }
 }
