@@ -118,6 +118,11 @@ final class DockModel {
     /// DockModel+Sweeps.swift.
     var menuWindows: [pid_t: MenuWindows] = [:]
     @ObservationIgnored var menuWindowsAsked: [pid_t: Date] = [:]
+    /// Counts menus opening, for a menu that shows what nothing observed announces — the Space in
+    /// front, macOS's own settings — to read: SwiftUI rebuilds a menu it built before only when
+    /// something it observes changes (measured: Finder's, built on Desktop 4, still offered Desktop 4
+    /// as This Desktop on Desktop 5).
+    private(set) var menusOpened = 0
 
     @ObservationIgnored let settings: DockSettings
     /// Opens a Grid stack's grid from the dock it was clicked on, answering whether one did. Set by
@@ -212,6 +217,10 @@ final class DockModel {
                 self?.refreshMinimizedWindows()
                 self?.refreshBadges()
             }
+        }
+        NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) {
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.menusOpened += 1 }
         }
         startMaintenance()
     }

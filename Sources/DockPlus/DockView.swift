@@ -291,7 +291,8 @@ private struct DockItemMenu: View {
             }
             if let url = item.url, let bundleID = Bundle(url: url)?.bundleIdentifier {
                 // Finder always opens at login; the macOS Dock does not offer it there either.
-                AssignToMenu(bundleID: bundleID, app: url, pid: item.pid, offersOpenAtLogin: item.id != DockModel.finderID)
+                AssignToMenu(bundleID: bundleID, app: url, pid: item.pid,
+                             offersOpenAtLogin: item.id != DockModel.finderID, model: model)
             }
             if item.url != nil {
                 Button("Show in Finder") { model.reveal(item) }
@@ -343,15 +344,18 @@ private struct AppWindowList: View {
 /// Options ▸ Open at Login and Assign To, as in the macOS Dock. Toggles rather than Buttons: in a
 /// SwiftUI menu a Toggle is what draws the checkmark (measured in FinderPlus — checkmark images on
 /// Buttons did not render). Read when the menu is built, since both live in macOS's own settings
-/// and nothing announces a change to them.
+/// and nothing announces a change to them — and built again on every open, through
+/// `model.menusOpened`, since SwiftUI would otherwise show the one it built last.
 private struct AssignToMenu: View {
     let bundleID: String
     let app: URL
     /// The running app's, for the Desktops its windows are on.
     let pid: pid_t?
     let offersOpenAtLogin: Bool
+    let model: DockModel
 
     var body: some View {
+        let _ = model.menusOpened
         let current = DesktopAssignments.assignment(of: bundleID)
         Menu("Options") {
             if offersOpenAtLogin {
