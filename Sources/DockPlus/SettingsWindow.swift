@@ -130,6 +130,8 @@ private enum SettingsIndex {
              ["battery", "charge", "charging", "power", "percent", "widget"]),
         item("runningAppsWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Running apps",
              ["running", "apps", "open", "unpinned", "collect", "group", "widget"]),
+        item("keepAwakeWidget", .widgets, SettingsAnchor.widgets, "Widgets", "Keep awake",
+             ["awake", "sleep", "caffeinate", "caffeine", "amphetamine", "display", "screen", "widget"]),
         item("spacers", .widgets, SettingsAnchor.spacers, "Layout", "Add or remove spacers and dividers",
              ["spacer", "space", "gap", "spacing", "divider", "separator", "line", "remove", "add"]),
         item("theme", .appearance, SettingsAnchor.theme, "Theme", "Bar tint",

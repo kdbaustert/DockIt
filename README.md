@@ -26,8 +26,9 @@ sight.
   to it, even on another Desktop or display.
 - **Minimized windows** sit beside the Trash as their own snapshot tiles, as in the macOS Dock.
 - **Widgets:** now playing (Spotify and Music, with playback controls), weather, a clock, your
-  next calendar event today, and battery charge on Macs that have a battery. You can reorder them
-  by dragging.
+  next calendar event today, battery charge on Macs that have a battery, and keep awake, which
+  stops your Mac and its display from sleeping until you turn it off or for a set time. You can
+  reorder them by dragging.
 - **Stacks** for folders such as Downloads, shown as a menu or a grid, each with its own sort order and subfolders you can open, and **spacers** to group icons.
 - **Magnification**, with adjustable amount and reach, and an option to start growing as the
   pointer approaches.

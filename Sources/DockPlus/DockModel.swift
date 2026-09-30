@@ -5,7 +5,7 @@ import SwiftUI
 struct DockItem: Identifiable, Equatable, Sendable {
     enum Kind: Sendable {
         case app, folder, trash, separator, spacer, minimizedWindow, nowPlaying, weather, clock, battery, calendar,
-             runningApps
+             runningApps, keepAwake
     }
 
     let id: String
@@ -36,6 +36,7 @@ struct DockItem: Identifiable, Equatable, Sendable {
         case .clock: .fixed(84)
         case .battery: .fixed(84)
         case .calendar: .fixed(156)
+        case .keepAwake: .fixed(108)
         case .runningApps: .fixed(Self.runningAppsWidth(count: apps.count, height: m.iconSize))
         }
     }
@@ -269,6 +270,7 @@ final class DockModel {
             _ = (settings.pinnedApps, settings.stacks, settings.hiddenApps,
                  settings.showsMinimizedWindows, settings.showsNowPlaying, settings.showsWeather,
                  settings.showsClock, settings.showsBattery, settings.showsCalendar, settings.showsRunningApps,
+                 settings.showsKeepAwake,
                  settings.widgetOrder,
                  settings.edge, settings.showsRecentApps)
         } onChange: { [weak self] in
@@ -375,6 +377,7 @@ final class DockModel {
         if settings.showsBattery, WidgetsModel.hasBattery { enabledWidgets.insert("battery") }
         if settings.showsCalendar { enabledWidgets.insert("calendar") }
         if settings.showsRunningApps { enabledWidgets.insert("runningApps") }
+        if settings.showsKeepAwake { enabledWidgets.insert("keepAwake") }
         let result = Self.items(
             pinned: settings.pinnedApps, hidden: settings.hiddenApps, stacks: settings.stacks,
             running: running.map(RunningApp.init), recent: settings.showsRecentApps ? settings.recentApps : [],
@@ -520,6 +523,7 @@ final class DockModel {
             case "battery": kind = .battery
             case "calendar": kind = .calendar
             case "runningApps": kind = .runningApps
+            case "keepAwake": kind = .keepAwake
             default: continue
             }
             guard enabledWidgets.contains(name) else { continue }
@@ -634,7 +638,7 @@ final class DockModel {
             if let windowID = item.windowID, let pid = item.pid {
                 WindowActions.raise(windowID, pid: pid)
             }
-        case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
+        case .separator, .spacer, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps, .keepAwake:
             break
         }
     }
@@ -795,7 +799,8 @@ final class DockModel {
             settings.stacks.removeAll { "folder:" + $0 == item.id }
         case .spacer:
             settings.pinnedApps.removeAll { $0 == item.id }
-        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
+        case .trash, .separator, .minimizedWindow, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps,
+             .keepAwake:
             return
         }
     }

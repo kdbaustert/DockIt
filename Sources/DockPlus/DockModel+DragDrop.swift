@@ -38,7 +38,7 @@ extension DockModel {
         switch item.kind {
         case .app, .spacer:
             return 0...(others.firstIndex { $0.kind == .separator } ?? others.count)
-        case .nowPlaying, .weather, .clock, .battery, .calendar:
+        case .nowPlaying, .weather, .clock, .battery, .calendar, .keepAwake:
             let widgets = others.indices.filter { others[$0].id.hasPrefix(widgetIDPrefix) }
             guard let first = widgets.first, let last = widgets.last else { return others.count...others.count }
             return first...(last + 1)

@@ -37,7 +37,7 @@ func legacyMagnifyAmount(magnifiedSize: Double, iconSize: Double) -> Double {
 /// Every widget the bar knows, in their default order. A new widget goes on the end: an order saved
 /// before it existed gets it appended (below), so putting it anywhere else would give a fresh
 /// install and an upgraded one two different default orders.
-let canonicalWidgetOrder = ["nowPlaying", "weather", "clock", "calendar", "battery", "runningApps"]
+let canonicalWidgetOrder = ["nowPlaying", "weather", "clock", "calendar", "battery", "runningApps", "keepAwake"]
 
 /// A saved widget order healed: each known widget once, where it first appears, then any missing
 /// ones in their default order, and nothing unknown. A stored order is only ever rewritten by
@@ -119,12 +119,15 @@ final class DockSettings {
     var showsCalendar: Bool { didSet { store.set(showsCalendar, forKey: "showsCalendar") } }
     /// Running apps that are not pinned leave the bar for one tile of small icons.
     var showsRunningApps: Bool { didSet { store.set(showsRunningApps, forKey: "showsRunningApps") } }
+    /// Synced as the tile, never as its state: whether this Mac is being kept awake is not a setting.
+    var showsKeepAwake: Bool { didSet { store.set(showsKeepAwake, forKey: "showsKeepAwake") } }
     /// The widgets' left-to-right order; only the enabled ones show.
     var widgetOrder: [String] { didSet { store.set(widgetOrder, forKey: "widgetOrder") } }
     /// Each widget's switch, by its name in `widgetOrder`.
     static let widgetSwitches: [String: ReferenceWritableKeyPath<DockSettings, Bool>] = [
         "nowPlaying": \.showsNowPlaying, "weather": \.showsWeather, "clock": \.showsClock,
         "calendar": \.showsCalendar, "battery": \.showsBattery, "runningApps": \.showsRunningApps,
+        "keepAwake": \.showsKeepAwake,
     ]
     /// Coordinates picked from a city search; 0,0 (an empty patch of the Gulf of Guinea) means
     /// "unset — geocode the typed name instead".
@@ -213,6 +216,7 @@ final class DockSettings {
         "showsBattery": false,
         "showsCalendar": false,
         "showsRunningApps": false,
+        "showsKeepAwake": false,
         "widgetOrder": canonicalWidgetOrder,
         "weatherLocation": "",
         "weatherLatitude": 0.0,
@@ -279,6 +283,7 @@ final class DockSettings {
         showsBattery = store.bool(forKey: "showsBattery")
         showsCalendar = store.bool(forKey: "showsCalendar")
         showsRunningApps = store.bool(forKey: "showsRunningApps")
+        showsKeepAwake = store.bool(forKey: "showsKeepAwake")
         widgetOrder = normalizedWidgetOrder(store.stringArray(forKey: "widgetOrder") ?? canonicalWidgetOrder)
         weatherLocation = store.string(forKey: "weatherLocation") ?? ""
         weatherLatitude = store.double(forKey: "weatherLatitude")

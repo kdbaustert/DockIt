@@ -1,12 +1,14 @@
 import AppKit
 import EventKit
+import IOKit.pwr_mgt
 import Observation
 
 /// The data behind the bar's widget tiles. Each source runs only while its tile is on, and each
 /// keeps its own cadence: the clock ticks, the weather ambles, now-playing waits for the players.
 ///
 /// This file holds every source's state and wires the sources up; each source's behaviour lives in
-/// its own file (WidgetsClock, WidgetsWeather, WidgetsNowPlaying, WidgetsBattery, WidgetsCalendar).
+/// its own file (WidgetsClock, WidgetsWeather, WidgetsNowPlaying, WidgetsBattery, WidgetsCalendar,
+/// WidgetsKeepAwake).
 /// An extension cannot add stored
 /// properties, so the state is here — and its setters are module-wide rather than `private` only so
 /// those files can write it. Views read it; nothing outside those files should assign it.
@@ -46,6 +48,13 @@ final class WidgetsModel {
     /// The next event's title; nil when there are no more today.
     var calendarTitle: String?
     var calendarTime = ""
+
+    // MARK: Keep awake
+    var isKeepingAwake = false
+    /// When it turns itself off; nil while on indefinitely, and while off.
+    var keepAwakeUntil: Date?
+    /// `keepAwakeUntil` as the tile shows it.
+    var keepAwakeEnd = ""
 
     /// Set while Settings' gallery shows the tiles, so the clock and battery previews read true with
     /// the widget off. Only those two: they cost a minute timer and a power notice, where weather
@@ -88,6 +97,10 @@ final class WidgetsModel {
     /// Watches app switches only while access is missing, to notice it being granted in System
     /// Settings; see `configureCalendar`.
     @ObservationIgnored var calendarAccessWatch: NSObjectProtocol?
+    /// Held while keeping awake; releasing it is what lets the Mac sleep again.
+    @ObservationIgnored var keepAwakeAssertion: IOPMAssertionID?
+    /// The one-shot end of a timed keep-awake.
+    @ObservationIgnored var keepAwakeTimer: Timer?
 
     init(settings: DockSettings) {
         self.settings = settings
@@ -119,18 +132,25 @@ final class WidgetsModel {
         } onChange: { [weak self] in
             self?.configureCalendar()
         }
+        observeContinuously(ownedBy: self) { [settings] in
+            _ = (settings.showsKeepAwake, settings.clock24Hour)
+        } onChange: { [weak self] in
+            self?.configureKeepAwake()
+        }
         // The minute timer runs on a clock that stops during sleep, so after a wake it showed the
         // time the Mac went to sleep until it next fired — and then fired off the minute. A clock
         // or time zone change is the same problem without the sleep. A locale change joined them when
         // the formatters stopped being made every tick, which had picked up a new locale's AM/PM and
         // day names within the minute. The calendar's one-shot timer has the same clock, and its
-        // "today" and times the same time zone and locale, so it re-reads on all four too.
+        // "today" and times the same time zone and locale, so it re-reads on all four too, and so
+        // does keep awake's end.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.configureClock()
                 self?.refreshCalendar()
+                self?.refreshKeepAwake()
             }
         }
         for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange,
@@ -139,6 +159,7 @@ final class WidgetsModel {
                 MainActor.assumeIsolated {
                     self?.configureClock()
                     self?.refreshCalendar()
+                    self?.refreshKeepAwake()
                 }
             }
         }
@@ -147,6 +168,7 @@ final class WidgetsModel {
         configurePlayer()
         configureBattery()
         configureCalendar()
+        configureKeepAwake()
     }
 
     /// Puts the named widget on the bar, from a click or a drop — a drop of one already there only

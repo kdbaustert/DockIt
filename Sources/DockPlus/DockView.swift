@@ -74,6 +74,10 @@ struct DockView: View {
                             CalendarTile(width: size, height: metrics.iconSize)
                                 .onDrag { model.dragPayload(for: item) }
                                 .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
+                        case .keepAwake:
+                            KeepAwakeTile(width: size, height: metrics.iconSize)
+                                .onDrag { model.dragPayload(for: item) }
+                                .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
                         case .runningApps:
                             // No drag of the tile itself: each icon in it drags its own app.
                             RunningAppsTile(apps: item.apps, width: size, height: metrics.iconSize, model: model)
@@ -311,7 +315,7 @@ private struct DockItemMenu: View {
             }
         case .spacer:
             Button("Remove from Dock") { model.unpin(item) }
-        case .separator, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps:
+        case .separator, .nowPlaying, .weather, .clock, .battery, .calendar, .runningApps, .keepAwake:
             EmptyView()
         }
     }
@@ -644,6 +648,70 @@ struct BatteryTile: View {
             Divider()
             DockMenuFooter()
         }
+    }
+}
+
+/// Keeps the Mac and its display from sleeping while on. A click turns it on indefinitely, or
+/// off again; its menu turns it on for a while instead.
+struct KeepAwakeTile: View {
+    let width: CGFloat
+    let height: CGFloat
+    private let widgets = WidgetsModel.shared
+
+    private static let durations: [(title: String, seconds: TimeInterval)] = [
+        ("30 Minutes", 30 * 60), ("1 Hour", 60 * 60), ("2 Hours", 2 * 60 * 60),
+    ]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: widgets.isKeepingAwake ? "cup.and.saucer.fill" : "cup.and.saucer")
+                .font(.system(size: height * 0.32))
+                .foregroundStyle(widgets.isKeepingAwake ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(widgets.isKeepingAwake ? "Awake" : "Keep Awake")
+                    .font(.system(size: 10, weight: .bold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 7)
+        .widgetTile(width: width, height: height)
+        .contentShape(Rectangle())
+        .onTapGesture { widgets.toggleKeepAwake() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Keep Awake")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { widgets.toggleKeepAwake() }
+        .contextMenu {
+            if widgets.isKeepingAwake {
+                Button("Turn Off") { widgets.stopKeepingAwake() }
+                Divider()
+            }
+            ForEach(Self.durations, id: \.seconds) { duration in
+                Button("Keep Awake for \(duration.title)") { widgets.startKeepingAwake(for: duration.seconds) }
+            }
+            Button("Keep Awake Indefinitely") { widgets.startKeepingAwake() }
+            Divider()
+            // The same setting as Settings ▸ Widgets ▸ Keep Awake.
+            Button("Remove from Dock") { DockSettings.shared.showsKeepAwake = false }
+            Divider()
+            DockMenuFooter()
+        }
+    }
+
+    private var subtitle: String {
+        guard widgets.isKeepingAwake else { return "Click to start" }
+        return widgets.keepAwakeEnd.isEmpty ? "Indefinitely" : "Until \(widgets.keepAwakeEnd)"
+    }
+
+    private var accessibilityValue: String {
+        guard widgets.isKeepingAwake else { return "Off" }
+        return widgets.keepAwakeEnd.isEmpty ? "On indefinitely" : "On until \(widgets.keepAwakeEnd)"
     }
 }
 

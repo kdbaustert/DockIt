@@ -157,6 +157,12 @@ final class DockModelItemsTests: XCTestCase {
         XCTAssertEqual(list.suffix(2).map(\.kind), [.calendar, .battery])
     }
 
+    func testKeepAwakeWidgetHasItsKind() {
+        let list = items(enabledWidgets: ["keepAwake"])
+        XCTAssertEqual(list.last?.id, "widget:keepAwake")
+        XCTAssertEqual(list.last?.kind, .keepAwake)
+    }
+
     /// An order saved before the battery and calendar existed still shows them, after the rest.
     func testOrderSavedBeforeNewWidgetsStillShowsThem() {
         let list = items(widgetOrder: ["clock", "weather", "nowPlaying"], enabledWidgets: ["clock", "battery", "calendar"])

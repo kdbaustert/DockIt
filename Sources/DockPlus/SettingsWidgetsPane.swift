@@ -16,9 +16,9 @@ struct WidgetsPane: View {
                     .disabled(!settings.showsWeather)
                 SettingsToggle(title: "Fahrenheit", isOn: $settings.weatherFahrenheit)
                     .disabled(!settings.showsWeather)
-                // The calendar's times follow it too, so the two tiles never disagree.
+                // The calendar's and keep awake's times follow it too, so the tiles never disagree.
                 SettingsToggle(title: "24-hour time", isOn: $settings.clock24Hour)
-                    .disabled(!settings.showsClock && !settings.showsCalendar)
+                    .disabled(!settings.showsClock && !settings.showsCalendar && !settings.showsKeepAwake)
                 CalendarAccessRow(settings: settings)
             }
             SettingsSection(
@@ -51,6 +51,7 @@ private struct WidgetGallery: View {
     private static let cards: [(name: String, title: String, width: CGFloat)] = [
         ("nowPlaying", "Now Playing", 150), ("weather", "Weather", 128), ("clock", "Clock", 84),
         ("calendar", "Calendar", 150), ("battery", "Battery", 84), ("runningApps", "Running Apps", 150),
+        ("keepAwake", "Keep Awake", 108),
     ]
     /// What the running-apps card shows: the apps its tile would hold, read as the gallery opens.
     @State private var runningApps: [DockItem] = []
@@ -112,6 +113,7 @@ private struct WidgetGallery: View {
             case "calendar": CalendarTile(width: width, height: Self.tileHeight)
             case "battery": BatteryTile(width: width, height: Self.tileHeight)
             case "runningApps": RunningAppsTile(apps: runningApps, width: width, height: Self.tileHeight)
+            case "keepAwake": KeepAwakeTile(width: width, height: Self.tileHeight)
             default: EmptyView()
             }
         }
