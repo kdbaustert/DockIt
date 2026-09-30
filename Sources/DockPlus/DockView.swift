@@ -289,8 +289,9 @@ private struct DockItemMenu: View {
                     Button("Hide from Dock") { model.hideFromDock(item) }
                 }
             }
-            if let bundleID = item.url.flatMap({ Bundle(url: $0)?.bundleIdentifier }) {
-                AssignToMenu(bundleID: bundleID)
+            if let url = item.url, let bundleID = Bundle(url: url)?.bundleIdentifier {
+                // Finder always opens at login; the macOS Dock does not offer it there either.
+                AssignToMenu(bundleID: bundleID, app: url, pid: item.pid, offersOpenAtLogin: item.id != DockModel.finderID)
             }
             if item.url != nil {
                 Button("Show in Finder") { model.reveal(item) }
@@ -339,23 +340,32 @@ private struct AppWindowList: View {
     }
 }
 
-/// Options ▸ Assign To, as in the macOS Dock. Toggles rather than Buttons: in a SwiftUI menu a
-/// Toggle is what draws the checkmark (measured in FinderPlus — checkmark images on Buttons did not
-/// render). Read when the menu is built, since the assignment lives in another app's preferences
-/// and nothing announces a change to it.
+/// Options ▸ Open at Login and Assign To, as in the macOS Dock. Toggles rather than Buttons: in a
+/// SwiftUI menu a Toggle is what draws the checkmark (measured in FinderPlus — checkmark images on
+/// Buttons did not render). Read when the menu is built, since both live in macOS's own settings
+/// and nothing announces a change to them.
 private struct AssignToMenu: View {
     let bundleID: String
+    let app: URL
+    /// The running app's, for the Desktops its windows are on.
+    let pid: pid_t?
+    let offersOpenAtLogin: Bool
 
     var body: some View {
         let current = DesktopAssignments.assignment(of: bundleID)
         Menu("Options") {
+            if offersOpenAtLogin {
+                let opensAtLogin = LoginItems.opensAtLogin(app)
+                Toggle("Open at Login", isOn: Binding(
+                    get: { opensAtLogin },
+                    set: { LoginItems.setOpensAtLogin(app, $0) }
+                ))
+            }
             Section("Assign To") {
                 option("All Desktops", .allDesktops, current)
-                option("This Desktop", .thisDesktop, current)
-                    .disabled(!DesktopAssignments.canAssignThisDesktop)
-                if case .otherDesktop(let number) = current {
-                    Toggle(number.map { "Desktop \($0)" } ?? "Another Desktop", isOn: .constant(true))
-                        .disabled(true)
+                ForEach(DesktopAssignments.desktopOptions(for: current, pid: pid), id: \.title) { desktop in
+                    option(desktop.title, desktop.assignment, current)
+                        .disabled(!desktop.isEnabled)
                 }
                 option("None", .none, current)
             }
@@ -367,9 +377,9 @@ private struct AssignToMenu: View {
     ) -> some View {
         Toggle(title, isOn: Binding(
             get: { current == target },
-            // Picking the ticked item again would only rewrite the binding and restart the Dock.
+            // Picking the ticked item again changes nothing.
             set: { on in
-                if on, target != current { DesktopAssignments.assign(bundleID, to: target) }
+                if on, target != current { DesktopAssignments.assign(bundleID, to: target, title: title, app: app) }
             }
         ))
     }
