@@ -36,8 +36,9 @@ final class DockController {
     private var monitors: [Any] = []
     private var lastMouse: NSPoint?
     private var stillTicks = 0
-    /// When the button came up during a drag from the bar; see `trackDrag`.
-    private var dragReleasedAt: Date?
+    /// When the button came up during a drag from the bar, and whether that was clear of it; see
+    /// `trackDrag`.
+    private var dragRelease: (at: Date, away: Bool)?
     /// Display asleep or another user's session in front: nothing to see, so nothing runs.
     private var isPaused = false
     /// Whether another app's window reaches into the resting bar, as last checked; only consulted
@@ -266,7 +267,7 @@ final class DockController {
         // other mode this is the only controller, so it must track wherever the pointer is.
         if model.drag != nil,
             settings.displayMode != .all || NSMouseInRect(mouse, screen.frame, false) {
-            trackDrag(over: hoveredIndex)
+            trackDrag(over: hoveredIndex, awayFromBar: across > reach + metrics.iconSize)
         }
         // Nothing is hovered while an icon is carried: no preview, and no name over the gap.
         let hoveredItem = model.drag != nil ? nil
@@ -347,20 +348,25 @@ final class DockController {
     }
 
     /// A drag from the bar: the gap follows the pointer along it. SwiftUI reports no end to a drag,
-    /// only a drop, so a release anywhere else is read here and puts the icon back — after a moment's
-    /// grace, because a drop on the bar is delivered just after the button comes up, and ending the
-    /// drag first would lose where it was dropped.
-    private func trackDrag(over index: Int?) {
+    /// only a drop, so a release anywhere else is read here — after a moment's grace, because a drop
+    /// on the bar is delivered just after the button comes up, and ending the drag first would lose
+    /// where it was dropped. Let go more than an icon's height clear of the bar, the item comes off
+    /// the dock, as in the macOS Dock; anywhere nearer, it goes back. Where it was let go is kept
+    /// from the release, not read after the grace, by which time the pointer has moved. No puff of
+    /// smoke: `NSAnimationEffect` is deprecated since macOS 14, and its replacement is only a cursor.
+    private func trackDrag(over index: Int?, awayFromBar: Bool) {
         guard NSEvent.pressedMouseButtons == 0 else {
-            dragReleasedAt = nil
+            dragRelease = nil
             withAnimation(.smooth(duration: 0.2)) { model.moveDrag(over: index) }
             return
         }
-        let released = dragReleasedAt ?? .now
-        dragReleasedAt = released
-        guard Date.now.timeIntervalSince(released) > 0.3 else { return }
-        dragReleasedAt = nil
-        withAnimation(.smooth(duration: 0.25)) { model.endDrag() }
+        let release = dragRelease ?? (Date.now, awayFromBar)
+        dragRelease = release
+        guard Date.now.timeIntervalSince(release.at) > 0.3 else { return }
+        dragRelease = nil
+        withAnimation(.smooth(duration: 0.25)) {
+            if !release.away || !model.endDragRemoving() { model.endDrag() }
+        }
     }
 
     /// The timer stops and the first mouse event of any kind starts it again. The monitors are

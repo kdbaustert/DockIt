@@ -78,6 +78,34 @@ extension DockModel {
         drag = nil
     }
 
+    /// The drag ended well away from the bar: the item comes off it, as a Dock icon dragged away
+    /// does. False, with the drag left for `endDrag` to put back, for anything its menu could not
+    /// remove either. A widget's switch is the one Settings and its menu turn off.
+    func endDragRemoving() -> Bool {
+        guard let item = drag.flatMap({ current in builtItems.first { $0.id == current.id } }),
+              Self.isRemovableByDrag(item)
+        else { return false }
+        drag = nil
+        if item.id.hasPrefix(Self.widgetIDPrefix) {
+            guard let isOn = DockSettings.widgetSwitches[String(item.id.dropFirst(Self.widgetIDPrefix.count))]
+            else { return false }
+            settings[keyPath: isOn] = false
+        } else {
+            unpin(item)
+        }
+        return true
+    }
+
+    /// A pinned app other than Finder, which is always there; a spacer; or a widget. An app that is
+    /// only running is not in the dock to be taken out of it. Pure, for the tests.
+    nonisolated static func isRemovableByDrag(_ item: DockItem) -> Bool {
+        switch item.kind {
+        case .app: item.isPinned && item.id != finderID
+        case .spacer, .nowPlaying, .weather, .clock, .battery, .calendar, .keepAwake: true
+        case .folder, .trash, .separator, .minimizedWindow, .runningApps: false
+        }
+    }
+
     /// Dropped on the bar: the order shown becomes the order kept. False when there was no drag in
     /// the bar to commit — a drop from Finder or from Settings, which the payload places instead.
     private func commitDrag() -> Bool {
@@ -249,6 +277,36 @@ extension DockModel {
         return true
     }
 
+    /// A mounted volume other than the startup disk, which cannot be ejected.
+    nonisolated static func isEjectableVolume(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isVolumeKey, .volumeIsRootFileSystemKey]) else {
+            return false
+        }
+        return values.isVolume == true && values.volumeIsRootFileSystem != true
+    }
+
+    /// Off the main thread: the unmount waits for the disk to flush, which can take seconds, and the
+    /// dock would stop tracking the pointer meanwhile. A disk in use stays mounted, and says so, as
+    /// Finder does — otherwise the drop would look like it did nothing.
+    private func eject(_ volume: URL) {
+        Task.detached {
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: volume)
+            } catch {
+                await MainActor.run { Self.explainEjectFailed(volume, error) }
+            }
+        }
+    }
+
+    private static func explainEjectFailed(_ volume: URL, _ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "DockPlus couldn't eject “\(FileManager.default.displayName(atPath: volume.path))”"
+        alert.informativeText = error.localizedDescription
+        // DockPlus is a background app; without this the alert can open behind other windows.
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     private func loadURL(_ provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
@@ -258,7 +316,12 @@ extension DockModel {
     private func drop(_ urls: [URL], onto target: DockItem?) {
         guard !urls.isEmpty else { return }
         if target?.kind == .trash {
-            NSWorkspace.shared.recycle(urls) { [weak self] _, _ in
+            // A disk dropped on the Trash is ejected, as in the macOS Dock; recycling one only fails.
+            let volumes = urls.filter(Self.isEjectableVolume)
+            for volume in volumes { eject(volume) }
+            let files = urls.filter { !volumes.contains($0) }
+            guard !files.isEmpty else { return }
+            NSWorkspace.shared.recycle(files) { [weak self] _, _ in
                 Task { @MainActor in self?.refreshTrash() }
             }
             return

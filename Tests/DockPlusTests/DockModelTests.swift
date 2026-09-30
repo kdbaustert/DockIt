@@ -71,6 +71,28 @@ final class DockModelTests: XCTestCase {
         XCTAssertNil(DockModel.gapRange(for: item("folder:/a", .folder), in: bar))
     }
 
+    // MARK: - Dragging off the bar
+
+    /// What a menu could take off the dock, dragging away can too: not Finder, and not an app that
+    /// is only running.
+    func testDraggingAwayRemovesPinnedAppsSpacersAndWidgets() {
+        XCTAssertTrue(DockModel.isRemovableByDrag(app(safari)))
+        XCTAssertTrue(DockModel.isRemovableByDrag(item(spacer, .spacer)))
+        XCTAssertTrue(DockModel.isRemovableByDrag(item("widget:keepAwake", .keepAwake)))
+        XCTAssertFalse(DockModel.isRemovableByDrag(finder))
+        XCTAssertFalse(DockModel.isRemovableByDrag(app(mail, pinned: false)))
+        XCTAssertFalse(DockModel.isRemovableByDrag(item("widget:runningApps", .runningApps)))
+    }
+
+    // MARK: - Dropping on the Trash
+
+    /// The startup disk and ordinary folders go to the Trash's recycling, never to an eject.
+    func testOnlyMountedVolumesOtherThanTheStartupDiskEject() {
+        XCTAssertFalse(DockModel.isEjectableVolume(URL(fileURLWithPath: "/")))
+        XCTAssertFalse(DockModel.isEjectableVolume(FileManager.default.temporaryDirectory))
+        XCTAssertFalse(DockModel.isEjectableVolume(URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)")))
+    }
+
     // MARK: - placed
 
     func testNewAppWithNoTargetGoesLast() {

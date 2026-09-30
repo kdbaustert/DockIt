@@ -17,7 +17,8 @@ sight.
 ## Features
 
 - **Pinned and running apps**, with Finder always first and the Trash at the end. Drag icons to
-  reorder them, drop apps on the dock to pin them, and drop files on an app to open them with it.
+  reorder them, drag one off the dock to remove it, drop apps on the dock to pin them, drop files
+  on an app to open them with it, and drop a disk on the Trash to eject it.
 - **Recent apps.** Optionally, the last three apps you quit appear after the running apps, as
   with the macOS Dock's "Show suggested and recent apps" option.
 - **Badges.** Unread counts from Mail, Messages, Slack and other apps show on their icons, as
