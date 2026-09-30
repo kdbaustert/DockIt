@@ -459,7 +459,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Hide DockPlus", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit DockPlus", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        // ⌘Q closes Settings instead of quitting: DockPlus is the dock, and a reflexive ⌘Q to dismiss
+        // a settings window should not take it down. Quitting stays one deliberate click away.
+        appMenu.addItem(withTitle: "Close Settings", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit DockPlus", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         appItem.submenu = appMenu
         main.addItem(appItem)
 
