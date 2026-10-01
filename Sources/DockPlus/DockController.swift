@@ -112,6 +112,10 @@ final class DockController {
         trackSettings()
         setPolling(fast: false)
         updateOverlapWatch()
+        // Not left at its assumed true: controllers are rebuilt on display changes, which can land
+        // while a full-screen Space is up — waking the display mid-video — and a new one would run
+        // magnification and previews for a bar no one can see until the next app or Space change.
+        refreshActiveSpace()
     }
 
     /// Ordered out and stopped; the delegate replaces controllers when the display setup changes.
@@ -271,7 +275,13 @@ final class DockController {
         let metrics = layout.metrics
         // On a full-screen app's Space the bar is not there: the pointer along the bottom of a video
         // polled at display rate, laying out and previewing a bar no one could see.
-        let onEdge = isOnActiveSpace && along >= 0 && along <= state.stripLength && across >= -1
+        let atEdge = along >= 0 && along <= state.stripLength && across >= -1
+        // The cache can miss an update — the notifications can fire before the window server has
+        // moved the panel when a full-screen Space ends, and false would then stick: a dock that
+        // looks dead until the next app switch. So a pointer at the edge of a bar the cache says is
+        // absent re-asks; the cost lands only on the state the re-ask is there to correct.
+        if atEdge, !isOnActiveSpace { refreshActiveSpace() }
+        let onEdge = isOnActiveSpace && atEdge
         let reach = barReach(layout)
         let overBar = onEdge && !state.isHidden
             && along >= layout.start && along <= layout.start + layout.length && across <= reach
@@ -291,7 +301,7 @@ final class DockController {
             // the release; kept, it ended the next drag at its first tick, as released near the bar.
             dragRelease = nil
         } else if settings.displayMode != .all || NSMouseInRect(mouse, screen.frame, false) {
-            trackDrag(over: hoveredIndex, awayFromBar: across > reach + metrics.iconSize)
+            trackDrag(over: hoveredIndex, along: along, awayFromBar: across > reach + metrics.iconSize)
         }
         // Nothing is hovered while an icon is carried: no preview, and no name over the gap.
         let hoveredItem = model.drag != nil ? nil
@@ -380,18 +390,20 @@ final class DockController {
     /// the dock, as in the macOS Dock; anywhere nearer, it goes back. Where it was let go is kept
     /// from the release, not read after the grace, by which time the pointer has moved. No puff of
     /// smoke: `NSAnimationEffect` is deprecated since macOS 14, and its replacement is only a cursor.
-    private func trackDrag(over index: Int?, awayFromBar: Bool) {
+    private func trackDrag(over index: Int?, along: CGFloat, awayFromBar: Bool) {
         // Esc cancels the drag, but the button is still held: the gap went on following the pointer,
         // and letting go clear of the bar then removed the item. Read off the keyboard's state, not
-        // an event: the key goes to the app in front, which is rarely DockPlus.
+        // an event: the key goes to the app in front, which is rarely DockPlus. Cancelled, not
+        // cleared: the AppKit session lives until the button comes up, and `handleDrop` must still
+        // find the drag to swallow the release.
         if CGEventSource.keyState(.combinedSessionState, key: Self.escapeKey) {
             dragRelease = nil
-            withAnimation(.smooth(duration: 0.25)) { model.endDrag() }
+            withAnimation(.smooth(duration: 0.25)) { model.cancelDrag() }
             return
         }
         guard NSEvent.pressedMouseButtons == 0 else {
             dragRelease = nil
-            withAnimation(.smooth(duration: 0.2)) { model.moveDrag(over: index) }
+            withAnimation(.smooth(duration: 0.2)) { model.moveDrag(over: index, along: along, state: state) }
             return
         }
         let release = dragRelease ?? (Date.now, awayFromBar)
@@ -486,9 +498,13 @@ final class DockController {
     }
 
     /// How far the bar reaches off the edge. Once magnified, the grown icons are part of the bar;
-    /// before that, only the resting bar is.
+    /// before that, only the resting bar is. Never less than the resting bar: with nothing grown —
+    /// magnification off, or the pointer over widgets — depth is one padding short of the bar as
+    /// drawn, and the pointer in that band read as off the bar it was visibly on: the hover state
+    /// and click-through flickered at display rate, with a right-click falling through.
     private func barReach(_ layout: DockLayout) -> CGFloat {
-        state.pointer == nil ? layout.metrics.thickness : layout.depth + layout.metrics.padding
+        state.pointer == nil ? layout.metrics.thickness
+            : max(layout.metrics.thickness, layout.depth + layout.metrics.padding)
     }
 
     private func setHidden(_ hidden: Bool) {

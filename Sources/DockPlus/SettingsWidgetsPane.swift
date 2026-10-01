@@ -219,9 +219,7 @@ private struct CalendarAccessRow: View {
                 subtitle: "Turn on DockPlus in System Settings › Privacy & Security › Calendars."
             ) {
                 Button("Open System Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    NSWorkspace.shared.openPrivacyPane("Calendars")
                 }
             }
         }

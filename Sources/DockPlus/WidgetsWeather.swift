@@ -14,7 +14,7 @@ extension WidgetsModel {
             weatherTemperature = nil
             weatherPlace = ""
             weatherHighLow = ""
-            weatherReadingLocation = nil
+            weatherReadingKey = nil
             return
         }
         refreshWeather()
@@ -26,9 +26,16 @@ extension WidgetsModel {
         weatherTimer = timer
     }
 
+    /// Everything a reading depends on, as one string to compare fetches and the shown reading by.
+    private var weatherKey: String {
+        "\(settings.weatherLocation)|\(settings.weatherFahrenheit)"
+            + "|\(settings.weatherLatitude),\(settings.weatherLongitude)"
+    }
+
     private func refreshWeather() {
         let place = settings.weatherLocation
         let fahrenheit = settings.weatherFahrenheit
+        let key = weatherKey
         // Coordinates picked from the city search win over geocoding the typed name: the search
         // already disambiguated ("Springfield" names dozens of places).
         let pinned: Located? = settings.weatherLatitude != 0 || settings.weatherLongitude != 0
@@ -59,8 +66,9 @@ extension WidgetsModel {
             }
             // A cancelled fetch was superseded or switched off; it neither shows nor retries.
             guard let self, !Task.isCancelled else { return }
-            guard let located, let current else { return weatherFailed(for: place, mayRetry: mayRetry) }
-            weatherReadingLocation = place
+            guard let located, let current else { return weatherFailed(for: key, mayRetry: mayRetry) }
+            weatherReadingKey = key
+            weatherSuccesses += 1
             weatherPlace = Self.abbreviatingState(located.name)
             weatherTemperature = "\(Int(current.temperature.rounded()))°"
             weatherHighLow = "↑\(Int(current.high.rounded())) ↓\(Int(current.low.rounded()))"
@@ -68,13 +76,16 @@ extension WidgetsModel {
         }
     }
 
-    /// A reading for another location is wrong, not stale, so it goes; "--°" is honest. Then one
-    /// retry a minute on: a transient failure at launch otherwise leaves "--°" a whole cycle. It
-    /// fires only if nothing has changed or succeeded since. Not for a place the geocoder knows no
-    /// match for (`mayRetry: false`) — retrying a typo every minute hammered the geocoder forever.
-    private func weatherFailed(for place: String, mayRetry: Bool) {
-        if weatherReadingLocation != place {
-            weatherReadingLocation = nil
+    /// A reading for another key — place, unit or coordinates — is wrong, not stale, so it goes;
+    /// "--°" is honest. Then one retry a minute on: a transient failure at launch, or right after
+    /// a wake before the network is back, otherwise leaves the tile a whole cycle. It fires only if
+    /// nothing has changed or succeeded since — gated on the success count, not on an empty tile:
+    /// a kept stale reading is exactly the case that must still retry. Not for a place the geocoder
+    /// knows no match for (`mayRetry: false`) — retrying a typo every minute hammered the geocoder
+    /// forever.
+    private func weatherFailed(for key: String, mayRetry: Bool) {
+        if weatherReadingKey != key {
+            weatherReadingKey = nil
             weatherTemperature = nil
             weatherPlace = ""
             weatherHighLow = ""
@@ -84,9 +95,10 @@ extension WidgetsModel {
             weatherRetry = nil
             return
         }
+        let successesAtFailure = weatherSuccesses
         weatherRetry = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            guard let self, settings.showsWeather, settings.weatherLocation == place, weatherTemperature == nil
+            guard let self, settings.showsWeather, weatherKey == key, weatherSuccesses == successesAtFailure
             else { return }
             weatherRetry = nil
             refreshWeather()

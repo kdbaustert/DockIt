@@ -8,10 +8,13 @@ private let dragType = UTType(exportedAs: "dev.kennyb.dockplus.item")
 
 /// An icon being dragged along the bar, as the macOS Dock does it: lifted out of its slot, with the
 /// slot following the pointer as a gap the other icons slide apart for. `gap` is its index in the
-/// bar as shown; nil while the pointer is off the bar, where the gap closes.
+/// bar as shown; nil while the pointer is off the bar, where the gap closes. `cancelled` marks a
+/// drag Esc has ended: the icon is back in place, but the AppKit session runs until the button
+/// comes up, and the release must find the drag to know to swallow it.
 struct DockDrag: Equatable {
     let id: String
     var gap: Int?
+    var cancelled = false
 }
 
 extension DockModel {
@@ -22,7 +25,7 @@ extension DockModel {
     /// `items` with the dragged one moved to its gap, or taken out while it has none. Pure, for the
     /// tests.
     nonisolated static func arranged(_ items: [DockItem], drag: DockDrag?) -> [DockItem] {
-        guard let drag, let from = items.firstIndex(where: { $0.id == drag.id }) else { return items }
+        guard let drag, !drag.cancelled, let from = items.firstIndex(where: { $0.id == drag.id }) else { return items }
         var out = items
         let item = out.remove(at: from)
         guard let gap = drag.gap else { return out }
@@ -39,7 +42,7 @@ extension DockModel {
         case .app, .spacer:
             return 0...(others.firstIndex { $0.kind == .separator } ?? others.count)
         case .nowPlaying, .weather, .clock, .battery, .calendar, .keepAwake:
-            let widgets = others.indices.filter { others[$0].id.hasPrefix(widgetIDPrefix) }
+            let widgets = others.indices.filter { others[$0].widgetName != nil }
             guard let first = widgets.first, let last = widgets.last else { return others.count...others.count }
             return first...(last + 1)
         case .folder, .trash, .separator, .minimizedWindow, .runningApps:
@@ -66,10 +69,21 @@ extension DockModel {
     }
 
     /// The pointer moved during a drag: over the bar's item at `index`, or off the bar (nil).
-    func moveDrag(over index: Int?) {
-        guard let current = drag, let item = builtItems.first(where: { $0.id == current.id }) else { return }
+    /// `along` and `state` let the move be checked against the bar as it would look once moved: a
+    /// new gap is taken only if the pointer would still sit on the dragged item's slot afterwards.
+    /// Without that, a narrow item dragged over a wider one swapped with it every tick — the wider
+    /// icon kept landing back under the pointer — and the icons jittered at display rate.
+    func moveDrag(over index: Int?, along: CGFloat? = nil, state: PanelState? = nil) {
+        guard let current = drag, !current.cancelled,
+              let item = builtItems.first(where: { $0.id == current.id }) else { return }
         let gap = Self.gap(for: item, over: index, in: items)
         guard gap != current.gap else { return }
+        // Only an exact slot-for-slot move is checked. A gap clamped to its range's end (gap !=
+        // index) stays at that end wherever the pointer wanders, which cannot oscillate.
+        if let gap, gap == index, let along, let state {
+            let moved = Self.arranged(builtItems, drag: DockDrag(id: current.id, gap: gap))
+            guard layout(of: moved, for: state).index(at: along) == gap else { return }
+        }
         drag?.gap = gap
     }
 
@@ -78,16 +92,24 @@ extension DockModel {
         drag = nil
     }
 
+    /// Esc during a drag. Clearing the drag outright is not enough: the AppKit session is still
+    /// live, and a release over the bar then read the payload and moved or pinned the item anyway.
+    /// Marked cancelled instead, the icon goes back now and `handleDrop` swallows the release.
+    func cancelDrag() {
+        guard drag != nil, drag?.cancelled != true else { return }
+        drag?.cancelled = true
+    }
+
     /// The drag ended well away from the bar: the item comes off it, as a Dock icon dragged away
     /// does. False, with the drag left for `endDrag` to put back, for anything its menu could not
     /// remove either. A widget's switch is the one Settings and its menu turn off.
     func endDragRemoving() -> Bool {
-        guard let item = drag.flatMap({ current in builtItems.first { $0.id == current.id } }),
+        guard drag?.cancelled != true,
+              let item = drag.flatMap({ current in builtItems.first { $0.id == current.id } }),
               Self.isRemovableByDrag(item)
         else { return false }
-        if item.id.hasPrefix(Self.widgetIDPrefix) {
-            guard let isOn = DockSettings.widgetSwitches[String(item.id.dropFirst(Self.widgetIDPrefix.count))]
-            else { return false }
+        if let name = item.widgetName {
+            guard let isOn = DockSettings.widgetSwitches[name] else { return false }
             drag = nil
             settings[keyPath: isOn] = false
         } else {
@@ -114,10 +136,9 @@ extension DockModel {
             return false
         }
         let item = items[gap]
-        if item.id.hasPrefix(Self.widgetIDPrefix) {
+        if let name = item.widgetName {
             let next = gap + 1 < items.count ? items[gap + 1] : nil
-            placeWidget(String(item.id.dropFirst(Self.widgetIDPrefix.count)),
-                        before: next.flatMap { $0.id.hasPrefix(Self.widgetIDPrefix) ? $0 : nil })
+            placeWidget(name, before: next.flatMap { $0.widgetName != nil ? $0 : nil })
         } else if let path = item.kind == .spacer ? item.id : item.url?.path {
             // The pinned list sees only pinned items, so the drop is before the next pinned one; the
             // running apps' places come from what the bar shows, which keeps them where they are.
@@ -160,9 +181,7 @@ extension DockModel {
     nonisolated static let widgetIDPrefix = "widget:"
 
     func placeWidget(_ name: String, before target: DockItem?) {
-        let targetName = target.flatMap { item -> String? in
-            item.id.hasPrefix(Self.widgetIDPrefix) ? String(item.id.dropFirst(Self.widgetIDPrefix.count)) : nil
-        }
+        let targetName = target?.widgetName
         // Before the name check: a gallery widget dropped on itself is still a widget to add.
         WidgetsModel.shared.add(name)
         guard name != targetName else { return }
@@ -212,7 +231,7 @@ extension DockModel {
         // Asked for as the drag starts, so it is where the icon lifts out of the bar.
         beginDrag(item)
         // Spacers and widgets drag by their identity strings, exactly as an app drags by its path.
-        if item.kind == .spacer || item.id.hasPrefix(Self.widgetIDPrefix) {
+        if item.kind == .spacer || item.widgetName != nil {
             return Self.ownProcessPayload(item.id)
         }
         guard item.kind == .app, let url = item.url else { return NSItemProvider() }
@@ -250,6 +269,12 @@ extension DockModel {
 
     /// A drop on an icon (`target`) or on the bar itself (nil).
     func handleDrop(_ providers: [NSItemProvider], onto target: DockItem?) -> Bool {
+        // The release of a drag Esc cancelled: only one drag session runs at a time, so this drop
+        // is its own; read on, the payload would move or pin the item the cancel put back.
+        if let current = drag, current.cancelled {
+            endDrag()
+            return true
+        }
         if commitDrag() { return true }
         let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         if files.isEmpty {

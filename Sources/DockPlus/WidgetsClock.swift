@@ -9,23 +9,34 @@ extension WidgetsModel {
         // replace picked up a new time zone or locale for free, and this keeps that without relying
         // on whether a long-lived formatter would follow either change on its own.
         clockTimeFormatter = DateFormatter()
-        clockTimeFormatter.dateFormat = settings.clock24Hour ? "HH:mm" : "h:mm a"
+        clockTimeFormatter.dateFormat = settings.timeFormat
         clockDateFormatter = DateFormatter()
         clockDateFormatter.dateFormat = "EEE MMM d"
         tickClock()
-        // Aligned to the next minute, then per minute — no seconds are shown.
-        let timer = Timer(fire: Date.now.addingTimeInterval(60 - Date.now.timeIntervalSince1970.truncatingRemainder(dividingBy: 60)),
-                          interval: 60, repeats: true) { [weak self] _ in
+    }
+
+    private func tickClock() {
+        clockTime = clockTimeFormatter.string(from: .now)
+        clockDate = clockDateFormatter.string(from: .now)
+        armClockTimer()
+    }
+
+    /// One shot at the next minute's turn, re-armed from the wall clock each tick — no seconds are
+    /// shown. A repeating timer counts its minutes on the machine's internal clock, whose drift
+    /// from the wall clock accumulates; days of uptime in the early direction would read the time
+    /// just before the minute turns and show the previous minute for most of each one. The
+    /// calendar's and keep awake's one-shots recover the same way.
+    private func armClockTimer() {
+        clockTimer?.invalidate()
+        let timer = Timer(
+            fire: Date.now.addingTimeInterval(60 - Date.now.timeIntervalSince1970.truncatingRemainder(dividingBy: 60)),
+            interval: 0, repeats: false
+        ) { [weak self] _ in
             MainActor.assumeIsolated { self?.tickClock() }
         }
         // Late rather than early, so the minute has always turned; a second late is not seen.
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         clockTimer = timer
-    }
-
-    private func tickClock() {
-        clockTime = clockTimeFormatter.string(from: .now)
-        clockDate = clockDateFormatter.string(from: .now)
     }
 }

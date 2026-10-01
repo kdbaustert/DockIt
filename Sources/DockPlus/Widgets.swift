@@ -82,9 +82,13 @@ final class WidgetsModel {
     /// The one pending retry after a failed fetch. Held so a new configuration can cancel it, and
     /// so failures replace it rather than stacking one sleeper each.
     @ObservationIgnored var weatherRetry: Task<Void, Never>?
-    /// The location the shown reading belongs to — a failed fetch for a different one must not
-    /// leave the old city's temperature standing in for it.
-    @ObservationIgnored var weatherReadingLocation: String?
+    /// What the shown reading was fetched for — place, unit and coordinates, as `weatherKey`
+    /// builds it. A failed fetch for anything different must not leave the old reading standing in
+    /// for it: keyed on the place name alone, a unit toggle or new coordinates under the same name
+    /// kept the wrong reading up.
+    @ObservationIgnored var weatherReadingKey: String?
+    /// Counts successful readings, so a retry knows whether one landed since its failure.
+    @ObservationIgnored var weatherSuccesses = 0
     /// Set while a poll's osascript round trips are running; a notice arriving then waits for it
     /// rather than piling a second poll onto a player that is slow to answer.
     @ObservationIgnored var isPollingPlayer = false

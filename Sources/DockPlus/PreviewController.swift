@@ -291,9 +291,7 @@ private struct PermissionStrip: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Button("Open System Settings…") {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                    NSWorkspace.shared.open(url)
-                }
+                NSWorkspace.shared.openPrivacyPane("ScreenCapture")
             }
         }
         .padding(12)

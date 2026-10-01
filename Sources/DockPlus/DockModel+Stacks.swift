@@ -178,9 +178,7 @@ final class StackMenu: NSMenu, NSMenuDelegate {
     }
 
     static func openPrivacySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders") {
-            NSWorkspace.shared.open(url)
-        }
+        NSWorkspace.shared.openPrivacyPane("FilesAndFolders")
     }
 
     private static func entries(in folder: URL) throws -> [StackEntry] {

@@ -18,27 +18,27 @@ struct InteractionsPane: View {
                     .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Reveal sensitivity", subtitle: "How close to the edge the pointer must push.",
-                    value: $settings.revealSensitivity, range: 1...20,
+                    value: $settings.revealSensitivity, range: DockSettings.revealSensitivityRange,
                     format: { "\(Int($0)) pt" })
                     .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Reveal delay", subtitle: "How long the pointer holds the edge first.",
-                    value: $settings.revealDelay, range: 0...2, step: 0.1,
+                    value: $settings.revealDelay, range: DockSettings.revealDelayRange, step: 0.1,
                     format: { $0 == 0 ? "None" : String(format: "%.1fs", $0) })
                     .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Hide delay", subtitle: "How long after the pointer leaves before it slides away.",
-                    value: $settings.hideDelay, range: 0...2, step: 0.1,
+                    value: $settings.hideDelay, range: DockSettings.hideDelayRange, step: 0.1,
                     format: { $0 == 0 ? "None" : String(format: "%.1fs", $0) })
                     .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Reveal speed",
-                    value: $settings.revealSpeed, range: 0.25...4, step: 0.25,
+                    value: $settings.revealSpeed, range: DockSettings.revealSpeedRange, step: 0.25,
                     format: { String(format: "%.2f×", $0) })
                     .disabled(!settings.autoHides)
                 SettingsSlider(
                     title: "Hide speed",
-                    value: $settings.hideSpeed, range: 0.25...4, step: 0.25,
+                    value: $settings.hideSpeed, range: DockSettings.hideSpeedRange, step: 0.25,
                     format: { String(format: "%.2f×", $0) })
                     .disabled(!settings.autoHides)
             }
@@ -46,12 +46,12 @@ struct InteractionsPane: View {
                 SettingsToggle(title: "Magnify icons under the pointer", isOn: $settings.magnifies)
                 SettingsSlider(
                     title: "Amount", subtitle: "How much the hovered icon grows.",
-                    value: $settings.magnifyAmount, range: 1.0...2.5, step: 0.05,
+                    value: $settings.magnifyAmount, range: DockSettings.magnifyAmountRange, step: 0.05,
                     format: { String(format: "%.2f×", $0) })
                     .disabled(!settings.magnifies)
                 SettingsSlider(
                     title: "Reach", subtitle: "How far along the bar the growth spreads.",
-                    value: $settings.magnifyReach, range: 1.0...4.0, step: 1.0,
+                    value: $settings.magnifyReach, range: DockSettings.magnifyReachRange, step: 1.0,
                     // Words, not "icons": the honest unit is icon-widths, which read as a glitch on
                     // the slider, and points would change meaning with every icon-size change.
                     format: { ["Narrow", "Medium", "Wide", "Widest"][min(max(Int($0), 1), 4) - 1] })
@@ -69,7 +69,7 @@ struct InteractionsPane: View {
                 SettingsSlider(
                     title: "Hover highlight",
                     subtitle: "How strongly the icon under the pointer is lit. 0% turns it off.",
-                    value: $settings.hoverIntensity, range: 0...40,
+                    value: $settings.hoverIntensity, range: DockSettings.hoverIntensityRange,
                     format: { "\(Int($0))%" })
             }
             SettingsSection(title: "Launching", anchor: SettingsAnchor.launching) {
@@ -97,7 +97,7 @@ struct InteractionsPane: View {
                     isOn: $settings.showsWindowPreviews)
                 SettingsSlider(
                     title: "Preview delay",
-                    value: $settings.previewDelay, range: 0...2, step: 0.1,
+                    value: $settings.previewDelay, range: DockSettings.previewDelayRange, step: 0.1,
                     format: { String(format: "%.1fs", $0) })
                     .disabled(!settings.showsWindowPreviews)
                 SettingsToggle(

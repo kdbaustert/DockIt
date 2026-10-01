@@ -16,13 +16,13 @@ struct AppearancePane: View {
                     ])
             }
             SettingsSection(title: "Size", anchor: SettingsAnchor.size) {
-                SettingsSlider(title: "Icon size", value: $settings.iconSize, range: 24...128)
+                SettingsSlider(title: "Icon size", value: $settings.iconSize, range: DockSettings.iconSizeRange)
                 SettingsSlider(
                     title: "Icon padding", subtitle: "Space between neighbouring icons.",
-                    value: $settings.iconPadding, range: 0...24)
+                    value: $settings.iconPadding, range: DockSettings.iconPaddingRange)
                 SettingsSlider(
                     title: "Dock padding", subtitle: "Space between the icons and the edge of the bar.",
-                    value: $settings.dockPadding, range: 0...24)
+                    value: $settings.dockPadding, range: DockSettings.dockPaddingRange)
             }
             SettingsSection(title: "Theme", anchor: SettingsAnchor.theme) {
                 SettingsRow(title: "Bar tint", subtitle: "A colour washed over the glass. Reset returns to plain glass.") {
@@ -38,10 +38,11 @@ struct AppearancePane: View {
                 }
                 SettingsSlider(
                     title: "Tint intensity",
-                    value: $settings.barTintIntensity, range: 0...60,
+                    value: $settings.barTintIntensity, range: DockSettings.barTintIntensityRange,
                     format: { "\(Int($0))%" })
                     .disabled(settings.barTint.isEmpty)
-                SettingsSlider(title: "Corner radius", value: $settings.barCornerRadius, range: 8...24)
+                SettingsSlider(
+                    title: "Corner radius", value: $settings.barCornerRadius, range: DockSettings.barCornerRadiusRange)
                 SettingsToggle(title: "Icon shadows", isOn: $settings.iconShadows)
                 SettingsToggle(
                     title: "Running app dots",

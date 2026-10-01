@@ -91,6 +91,10 @@ extension WidgetsModel {
     func refreshCalendar() {
         calendarTimer?.invalidate()
         calendarTimer = nil
+        // Access taken away in System Settings while the widget runs announces nothing; fetches
+        // just come back empty, and the tile said "No more events" instead of offering access. The
+        // re-check is one local question to TCC per refresh.
+        guard Self.currentCalendarAccess() == calendarAccess else { return configureCalendar() }
         guard let eventStore, calendarAccess == .granted else { return }
         let now = Date.now
         let dayStart = Calendar.current.startOfDay(for: now)
@@ -100,7 +104,7 @@ extension WidgetsModel {
         let entries = eventStore.events(matching: predicate).compactMap(CalendarEntry.init(event:))
         // The dock's times read like its clock, so the two never disagree about 24-hour time.
         let formatter = DateFormatter()
-        formatter.dateFormat = settings.clock24Hour ? "HH:mm" : "h:mm a"
+        formatter.dateFormat = settings.timeFormat
         let shown = Self.calendarEvent(in: entries, at: now)
         calendarTitle = shown?.title
         calendarTime = shown.map { Self.calendarTimeText(for: $0, at: now, time: formatter.string(from:)) } ?? ""
@@ -139,10 +143,11 @@ extension WidgetsModel {
 }
 
 extension CalendarEntry {
-    /// nil for what the tile passes over: all-day events, which are not "next" at any hour, and
-    /// invitations the user declined.
+    /// nil for what the tile passes over: all-day events, which are not "next" at any hour,
+    /// invitations the user declined, and meetings the organiser cancelled — Exchange and Google
+    /// keep those on the calendar, and the tile showed a meeting that won't happen.
     init?(event: EKEvent) {
-        guard !event.isAllDay,
+        guard !event.isAllDay, event.status != .canceled,
               event.attendees?.first(where: \.isCurrentUser)?.participantStatus != .declined
         else { return nil }
         let title = event.title ?? ""

@@ -43,7 +43,10 @@ struct DockAnchor: Equatable {
         case .left: visible.maxX - 8 - (dockFrame.minX + gap)
         case .right: dockFrame.maxX - gap - (visible.minX + 8)
         }
-        return max(room, 0)
+        // Never to nothing: huge icons beside a narrow display can leave no room at all, and a
+        // zero-width frame vanished the panel. Better a sliver over the bar than no preview;
+        // `frame(for:within:)` still keeps it on screen.
+        return max(room, 120)
     }
 }
 

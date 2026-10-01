@@ -14,6 +14,7 @@ private struct PermissionsState: Equatable {
 private struct PermissionRow: View {
     let title: String
     let granted: Bool
+    /// The Privacy & Security pane the button opens, named by what follows "Privacy_".
     let pane: String
 
     var body: some View {
@@ -26,7 +27,7 @@ private struct PermissionRow: View {
                     .foregroundStyle(.secondary)
                 if !granted {
                     Button("Open System Settings…") {
-                        if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
+                        NSWorkspace.shared.openPrivacyPane(pane)
                     }
                 }
             }
@@ -102,10 +103,10 @@ struct GeneralPane: View {
             ) {
                 PermissionRow(
                     title: "Screen Recording", granted: permissions.screenRecording,
-                    pane: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                    pane: "ScreenCapture")
                 PermissionRow(
                     title: "Accessibility", granted: permissions.accessibility,
-                    pane: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                    pane: "Accessibility")
             }
             SettingsSection(
                 title: "Updates", anchor: SettingsAnchor.updates,

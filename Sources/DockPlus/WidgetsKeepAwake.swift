@@ -86,7 +86,7 @@ extension WidgetsModel {
             return
         }
         let formatter = DateFormatter()
-        formatter.dateFormat = settings.clock24Hour ? "HH:mm" : "h:mm a"
+        formatter.dateFormat = settings.timeFormat
         keepAwakeEnd = formatter.string(from: keepAwakeUntil)
     }
 }

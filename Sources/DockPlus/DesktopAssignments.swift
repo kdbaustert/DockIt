@@ -107,9 +107,15 @@ enum DesktopAssignments {
         }
         pressQueue.async {
             // Looked up here, not at the click: a pick queued behind one that restarted the Dock would
-            // otherwise press a Dock that has since exited.
-            if let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
-                .first?.processIdentifier,
+            // otherwise press a Dock that has since exited. Right after such a restart the new Dock
+            // may not be listed yet, so a missing pid gets one more look a moment later — the
+            // fallback below restarts the Dock all over again, which one sleep is cheaper than.
+            var dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+            if dock == nil {
+                usleep(300_000)
+                dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+            }
+            if let pid = dock?.processIdentifier,
                pressDockMenuItem(title, for: app, dockPID: pid), awaitBinding(bundleID, target) { return }
             // Sync, so the next pick waits for this one's write: queued after it instead, an earlier
             // pick's write could land after a later pick and undo it.
@@ -197,21 +203,11 @@ enum DesktopAssignments {
 /// which Desktop is in front, or for the UUIDs bindings are keyed by.
 @MainActor
 private enum Spaces {
-    private typealias MainConnectionFn = @convention(c) () -> Int32
-    private typealias CopyManagedFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
-    private typealias SpacesForWindowsFn = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
-
-    private static let mainConnection = SkyLight.symbol("CGSMainConnectionID", MainConnectionFn.self)
-    private static let copyManaged = SkyLight.symbol("CGSCopyManagedDisplaySpaces", CopyManagedFn.self)
-    private static let spacesForWindows = SkyLight.symbol("CGSCopySpacesForWindows", SpacesForWindowsFn.self)
-    /// Current, other and user Spaces alike: where a window is, not only if it is in front.
-    private static let allSpacesMask: Int32 = 7
-
     /// Each display's Desktops, in the window server's display order. One entry, "Main", when
     /// "Displays have separate Spaces" is off: then every display shares one list. Full-screen apps'
     /// Spaces are left out — they are not Desktops, and are not counted in the numbering.
     static func displays() -> [DesktopAssignments.Display] {
-        managedDisplays().map { display in
+        SkyLight.managedDisplays().map { display in
             let spaces = display["Spaces"] as? [[String: Any]] ?? []
             return DesktopAssignments.Display(
                 current: (display["Current Space"] as? [String: Any])?["uuid"] as? String,
@@ -223,12 +219,13 @@ private enum Spaces {
     /// list's "all" option, which needs no Screen Recording for ids and owners. A window on more than
     /// one Space is one shown on every Desktop, and names none of them, so it is left out.
     static func desktops(ofWindowsOf pid: pid_t) -> Set<String> {
-        guard let mainConnection, let spacesForWindows,
+        guard let mainConnection = SkyLight.mainConnection,
+              let spacesForWindows = SkyLight.copySpacesForWindows,
               let info = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]]
         else { return [] }
         let uuids = Dictionary(
-            managedDisplays().flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }.compactMap { space in
+            SkyLight.managedDisplays().flatMap { $0["Spaces"] as? [[String: Any]] ?? [] }.compactMap { space in
                 (space["ManagedSpaceID"] as? Int).flatMap { id in (space["uuid"] as? String).map { (id, $0) } }
             },
             uniquingKeysWith: { first, _ in first })
@@ -237,19 +234,12 @@ private enum Spaces {
         for window in info where (window[kCGWindowOwnerPID as String] as? pid_t) == pid
             && (window[kCGWindowLayer as String] as? Int) == 0 {
             guard let id = window[kCGWindowNumber as String] as? UInt32,
-                  let spaces = spacesForWindows(connection, allSpacesMask, [NSNumber(value: id)] as CFArray)?
+                  let spaces = spacesForWindows(connection, SkyLight.allSpacesMask, [NSNumber(value: id)] as CFArray)?
                     .takeRetainedValue() as? [Int],
                   spaces.count == 1, let uuid = uuids[spaces[0]]
             else { continue }
             found.insert(uuid)
         }
         return found
-    }
-
-    private static func managedDisplays() -> [[String: Any]] {
-        guard let mainConnection, let copyManaged,
-              let displays = copyManaged(mainConnection())?.takeRetainedValue() as? [[String: Any]]
-        else { return [] }
-        return displays
     }
 }

@@ -23,6 +23,11 @@ struct DockItem: Identifiable, Equatable, Sendable {
     /// to the bar's items and rebuilds it like any other.
     var apps: [DockItem] = []
 
+    /// The widget this tile stands for, parsed out of its "widget:" id; nil for everything else.
+    var widgetName: String? {
+        id.hasPrefix(DockModel.widgetIDPrefix) ? String(id.dropFirst(DockModel.widgetIDPrefix.count)) : nil
+    }
+
     /// How much of the bar the item takes. The widget widths are fixed points: their content is
     /// text, which does not scale with the icons.
     func spec(for m: DockMetrics) -> DockItemSpec {
@@ -41,7 +46,7 @@ struct DockItem: Identifiable, Equatable, Sendable {
         }
     }
 
-    // The running-apps tile's geometry, which both its width here and its drawing in DockView read.
+    // The running-apps tile's geometry, which both its width here and its drawing in WidgetTiles read.
 
     /// Icons shown before the last slot becomes a "+N" for the rest.
     static let runningAppsShown = 8
@@ -152,6 +157,9 @@ final class DockModel {
     @ObservationIgnored private var lastRunningSignature: [pid_t: Int] = [:]
     /// Counts the maintenance timer's beats, for the minimized windows' periodic full sweep.
     @ObservationIgnored private var maintenanceBeats = 0
+    /// The frontmost app at the last activation — the app a switch just left, whose windows the
+    /// activation sweep must still ask about.
+    @ObservationIgnored private var lastFrontmostPID: pid_t?
     @ObservationIgnored var isSweepingMinimized = false
     @ObservationIgnored var isSweepingBadges = false
     @ObservationIgnored private var maintenanceTimer: Timer?
@@ -206,16 +214,24 @@ final class DockModel {
         // would otherwise be compared against a date that was never taken.
         refreshIcons()
         trackItems()
-        // Minimized windows: a full sweep whenever the frontmost app changes, and on the timer below
-        // the frontmost app each beat and every app each 15th (30 s). Asking every app each beat was a
-        // round trip per app every two seconds, and it is almost always the frontmost app that
-        // minimizes or restores. Badges too: switching to an app is usually reading what its badge
-        // counted, and the count should clear then, not at the next slow sweep.
+        // Minimized windows: on every app switch, ask the app just left — the one that may have
+        // minimized its last window on the way out — and the one arrived; on the timer below, the
+        // frontmost app each beat and every app each 15th (30 s). Asking every app on each switch
+        // was a round trip per regular app per Cmd-Tab (2-3 ms each, measured, and a slow one costs
+        // its 0.3 s timeout), all serialized ahead of any right-click's window list. Badges too:
+        // switching to an app is usually reading what its badge counted, and the count should clear
+        // then, not at the next slow sweep.
+        lastFrontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) {
-            [weak self] _ in
+            [weak self] note in
+            let activated = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
+                .processIdentifier
             MainActor.assumeIsolated {
-                self?.refreshMinimizedWindows()
-                self?.refreshBadges()
+                guard let self else { return }
+                let pids = Set([activated, self.lastFrontmostPID].compactMap(\.self))
+                self.lastFrontmostPID = activated ?? self.lastFrontmostPID
+                self.refreshMinimizedWindows(only: pids.isEmpty ? nil : pids)
+                self.refreshBadges()
             }
         }
         NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) {
@@ -242,7 +258,8 @@ final class DockModel {
                 guard let self else { return }
                 self.maintenanceBeats += 1
                 self.refreshTrash()
-                self.refreshMinimizedWindows(frontmostOnly: self.maintenanceBeats % 15 != 0)
+                self.refreshMinimizedWindows(only: self.maintenanceBeats % 15 == 0 ? nil
+                    : NSWorkspace.shared.frontmostApplication.map { [$0.processIdentifier] })
                 if self.maintenanceBeats % 3 == 0 {
                     self.rebuildIfRunningAppsChanged()
                     self.refreshBadges()
@@ -312,18 +329,26 @@ final class DockModel {
     /// ask for it, with the same inputs, for every pointer move — and each build is a handful of
     /// arrays. Callers take the metrics from the result, since fitting can change the icon size.
     func layout(for state: PanelState) -> DockLayout {
-        let reach = settings.magnifyReach
-        let gain = state.gain
         let key = LayoutKey(
             items: items, metrics: metrics, stripLength: state.stripLength, pointer: state.pointer,
-            gain: gain, reach: reach)
+            gain: state.gain, reach: settings.magnifyReach)
         if let cached = state.layoutCache, cached.key == key { return cached.layout }
-        let items = self.items
+        let layout = layout(of: items, for: state)
+        state.layoutCache = (key, layout)
+        return layout
+    }
+
+    /// The geometry of `items` on `state`'s panel — `layout(for:)` without the cache, for a bar that
+    /// is not the one shown: `moveDrag` builds the bar a candidate gap would give to check the
+    /// pointer would still be on the dragged item's slot.
+    func layout(of items: [DockItem], for state: PanelState) -> DockLayout {
+        let reach = settings.magnifyReach
+        let gain = state.gain
         // Some room at either end, as the macOS Dock leaves.
         let fitted = DockLayout.fitted(metrics, available: state.stripLength - 16) { m in
             items.map { $0.spec(for: m) }
         }
-        let layout = DockLayout(
+        return DockLayout(
             items: items.map { $0.spec(for: fitted) },
             metrics: fitted,
             stripLength: state.stripLength,
@@ -332,8 +357,6 @@ final class DockModel {
                 magnificationFalloff(distance: distance, iconSize: iconSize, reachIcons: reach) * gain
             }
         )
-        state.layoutCache = (key, layout)
-        return layout
     }
 
     // MARK: - Items
@@ -379,14 +402,10 @@ final class DockModel {
             $0.activationPolicy == .regular && $0.processIdentifier != me
                 && (myBundleID == nil || $0.bundleIdentifier != myBundleID)
         }
-        var enabledWidgets: Set<String> = []
-        if settings.showsNowPlaying { enabledWidgets.insert("nowPlaying") }
-        if settings.showsWeather { enabledWidgets.insert("weather") }
-        if settings.showsClock { enabledWidgets.insert("clock") }
-        if settings.showsBattery, WidgetsModel.hasBattery { enabledWidgets.insert("battery") }
-        if settings.showsCalendar { enabledWidgets.insert("calendar") }
-        if settings.showsRunningApps { enabledWidgets.insert("runningApps") }
-        if settings.showsKeepAwake { enabledWidgets.insert("keepAwake") }
+        // From the one table that names every widget's switch, so a widget added there is enabled
+        // here without a second list to forget.
+        var enabledWidgets = Set(DockSettings.widgetSwitches.filter { settings[keyPath: $0.value] }.keys)
+        if !WidgetsModel.hasBattery { enabledWidgets.remove("battery") }
         let result = Self.items(
             pinned: settings.pinnedApps, hidden: settings.hiddenApps, stacks: settings.stacks,
             running: running.map(RunningApp.init), recent: settings.showsRecentApps ? settings.recentApps : [],
@@ -410,6 +429,14 @@ final class DockModel {
         // An app that quit loses its place: it comes back at the end, as in the macOS Dock.
         let runningIDs = Set(running.map { RunningApp($0).id })
         runningAnchors = runningAnchors.filter { runningIDs.contains($0.key) }
+        // The context-menu caches too: entries are per right-clicked pid and otherwise only ever
+        // grew, and a recycled pid would briefly show the dead app's window titles. `menuWindows`
+        // is observed by every cached menu, so it is only touched when something is actually gone.
+        let runningPids = Set(running.map(\.processIdentifier))
+        menuWindowsAsked = menuWindowsAsked.filter { runningPids.contains($0.key) }
+        if menuWindows.contains(where: { !runningPids.contains($0.key) }) {
+            menuWindows = menuWindows.filter { runningPids.contains($0.key) }
+        }
         // Only what is on the bar: apps come and go all day, and an app with no bundle gets a new
         // "pid:" key at every launch, so the cache otherwise only ever grew.
         let onBar = Set(result.flatMap { [$0.id] + $0.apps.map(\.id) })
@@ -539,8 +566,8 @@ final class DockModel {
             // An empty tile would be a gap that says nothing; it comes back with the first app.
             if kind == .runningApps, collected.isEmpty { continue }
             result.append(DockItem(
-                id: "widget:" + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false, pid: nil,
-                apps: kind == .runningApps ? collected : []))
+                id: widgetIDPrefix + name, kind: kind, url: nil, name: name, isPinned: true, isRunning: false,
+                pid: nil, apps: kind == .runningApps ? collected : []))
         }
         return result
     }
@@ -888,10 +915,8 @@ final class DockModel {
         alert.addButton(withTitle: "Cancel")
         // DockPlus is a background app; without this the alert can open behind other windows.
         NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn,
-              let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
-        else { return }
-        NSWorkspace.shared.open(url)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        NSWorkspace.shared.openPrivacyPane("Automation")
     }
 
     // MARK: - Helpers
@@ -912,6 +937,16 @@ final class DockModel {
 extension DockModel.RunningApp {
     init(_ app: NSRunningApplication) {
         self.init(pid: app.processIdentifier, bundleURL: app.bundleURL, name: app.localizedName ?? "")
+    }
+}
+
+extension NSWorkspace {
+    /// System Settings on a Privacy & Security pane, named by what follows "Privacy_" — the one
+    /// URL scheme every permission hint in the app sends people to.
+    func openPrivacyPane(_ name: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_" + name)
+        else { return }
+        open(url)
     }
 }
 

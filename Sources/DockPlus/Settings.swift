@@ -54,7 +54,7 @@ func normalizedWidgetOrder(_ order: [String]) -> [String] {
 final class DockSettings {
     static let shared = DockSettings()
 
-    @ObservationIgnored private let store = UserDefaults.standard
+    @ObservationIgnored private let store: UserDefaults
 
     var edge: DockEdge { didSet { store.set(edge.rawValue, forKey: "edge") } }
     var iconSize: Double { didSet { store.set(iconSize, forKey: "iconSize") } }
@@ -137,6 +137,8 @@ final class DockSettings {
     var weatherLocation: String { didSet { store.set(weatherLocation, forKey: "weatherLocation") } }
     var weatherFahrenheit: Bool { didSet { store.set(weatherFahrenheit, forKey: "weatherFahrenheit") } }
     var clock24Hour: Bool { didSet { store.set(clock24Hour, forKey: "clock24Hour") } }
+    /// One format for every time on the bar: the clock, calendar and keep-awake widgets must never disagree.
+    var timeFormat: String { clock24Hour ? "HH:mm" : "h:mm a" }
     // Theme. An empty tint means the plain glass.
     var barTint: String { didSet { store.set(barTint, forKey: "barTint") } }
     var barTintIntensity: Double { didSet { store.set(barTintIntensity, forKey: "barTintIntensity") } }
@@ -240,7 +242,28 @@ final class DockSettings {
         "recentApps": [String](),
     ]
 
-    private init() {
+    /// What each numeric setting's Settings slider offers. `PortableSettings.clamped()` pulls a
+    /// synced or imported value into the same range, so the two are one constant rather than two
+    /// literals that could drift. Nonisolated because `clamped()` is.
+    nonisolated static let iconSizeRange: ClosedRange<Double> = 24...128
+    nonisolated static let iconPaddingRange: ClosedRange<Double> = 0...24
+    nonisolated static let dockPaddingRange: ClosedRange<Double> = 0...24
+    nonisolated static let magnifyAmountRange: ClosedRange<Double> = 1...2.5
+    nonisolated static let magnifyReachRange: ClosedRange<Double> = 1...4
+    nonisolated static let hoverIntensityRange: ClosedRange<Double> = 0...40
+    nonisolated static let revealSensitivityRange: ClosedRange<Double> = 1...20
+    nonisolated static let revealDelayRange: ClosedRange<Double> = 0...2
+    nonisolated static let hideDelayRange: ClosedRange<Double> = 0...2
+    nonisolated static let revealSpeedRange: ClosedRange<Double> = 0.25...4
+    nonisolated static let hideSpeedRange: ClosedRange<Double> = 0.25...4
+    nonisolated static let previewDelayRange: ClosedRange<Double> = 0...2
+    nonisolated static let barTintIntensityRange: ClosedRange<Double> = 0...60
+    nonisolated static let barCornerRadiusRange: ClosedRange<Double> = 8...24
+
+    /// `store` is a parameter so a test can build one over a throwaway suite; the app only ever
+    /// uses `shared`, over the standard defaults.
+    init(store: UserDefaults = .standard) {
+        self.store = store
         // Migrated once from the old points-based setting, so an existing install keeps its size.
         // Before `register(defaults:)`: after it, `object(forKey:)` answers with the registered
         // default and the migration could never see a missing amount. An iconSize never moved off

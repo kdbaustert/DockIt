@@ -32,7 +32,7 @@ enum WindowCapture {
     /// Front-to-back thumbnails of `pid`'s windows, at most `maxHeight` points tall, `scale` pixels to
     /// the point — the display's backing scale, or a Retina panel showed them upscaled and soft.
     /// Empty when permission is missing, the app has no windows, or the list cannot be read.
-    nonisolated static func thumbnails(pid: pid_t, maxHeight: CGFloat, scale: CGFloat = 1) async -> [WindowThumb] {
+    nonisolated static func thumbnails(pid: pid_t, maxHeight: CGFloat, scale: CGFloat) async -> [WindowThumb] {
         // Cancelled between steps: the pointer sweeping along the bar with the panel up cancels a
         // capture per icon passed, and each ran to the end regardless — a window list, an AX query
         // and up to ten screenshots nobody would see.
@@ -102,14 +102,8 @@ enum WindowCapture {
         return captured.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
-    private typealias MainConnectionFn = @convention(c) () -> Int32
-    private typealias CopySpacesForWindowsFn = @convention(c) (Int32, UInt32, CFArray) -> Unmanaged<CFArray>?
-    private typealias CopyManagedFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
     private typealias SetCurrentSpaceFn = @convention(c) (Int32, CFString, UInt64) -> Void
     private typealias ShowHideSpacesFn = @convention(c) (Int32, CFArray) -> Void
-    private static let mainConnection = SkyLight.symbol("CGSMainConnectionID", MainConnectionFn.self)
-    private static let copySpacesForWindows = SkyLight.symbol("CGSCopySpacesForWindows", CopySpacesForWindowsFn.self)
-    private static let copyManaged = SkyLight.symbol("CGSCopyManagedDisplaySpaces", CopyManagedFn.self)
     private static let setCurrentSpace = SkyLight.symbol("CGSManagedDisplaySetCurrentSpace", SetCurrentSpaceFn.self)
     private static let showSpaces = SkyLight.symbol("CGSShowSpaces", ShowHideSpacesFn.self)
     private static let hideSpaces = SkyLight.symbol("CGSHideSpaces", ShowHideSpacesFn.self)
@@ -125,11 +119,13 @@ enum WindowCapture {
     /// CGSShowSpaces/CGSHideSpaces.
     @discardableResult
     nonisolated static func travelToSpace(of windowID: CGWindowID) -> Bool {
-        guard let mainConnection, let copySpacesForWindows, let copyManaged,
+        guard let mainConnection = SkyLight.mainConnection,
+              let copySpacesForWindows = SkyLight.copySpacesForWindows,
+              let copyManaged = SkyLight.copyManaged,
               let setCurrentSpace, let showSpaces, let hideSpaces
         else { return false }
         let cid = mainConnection()
-        guard let spaces = copySpacesForWindows(cid, 0x7, [NSNumber(value: windowID)] as CFArray)?
+        guard let spaces = copySpacesForWindows(cid, SkyLight.allSpacesMask, [NSNumber(value: windowID)] as CFArray)?
             .takeRetainedValue() as? [NSNumber],
             let displays = copyManaged(cid)?.takeRetainedValue() as? [[String: Any]]
         else { return false }
@@ -152,12 +148,13 @@ enum WindowCapture {
         return false
     }
 
-    /// Whether the window server has the window on any Desktop. 0x7 asks for every kind of Space.
+    /// Whether the window server has the window on any Desktop.
     /// Unreadable counts as "yes": better a phantom thumbnail than real windows vanishing.
     nonisolated static func isOnSomeSpace(_ windowID: CGWindowID) -> Bool {
-        guard let mainConnection, let copySpacesForWindows else { return true }
+        guard let mainConnection = SkyLight.mainConnection,
+              let copySpacesForWindows = SkyLight.copySpacesForWindows else { return true }
         guard let spaces = copySpacesForWindows(
-            mainConnection(), 0x7, [NSNumber(value: windowID)] as CFArray)?.takeRetainedValue()
+            mainConnection(), SkyLight.allSpacesMask, [NSNumber(value: windowID)] as CFArray)?.takeRetainedValue()
         else { return true }
         return CFArrayGetCount(spaces) > 0
     }

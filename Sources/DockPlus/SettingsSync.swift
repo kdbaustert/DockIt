@@ -74,6 +74,14 @@ struct PortableSettings: Codable, Equatable {
         try JSONDecoder().decode(PortableSettings.self, from: data)
     }
 
+    /// Whether `decoded(from:)` failed because a newer DockPlus wrote the file: a JSON object holding
+    /// a setting in a type this one does not know. Bytes that are not a JSON object at all (`[]`)
+    /// also fail as a type mismatch, but at the top, with an empty coding path — that file is corrupt.
+    static func isFromNewerDockPlus(_ error: any Error) -> Bool {
+        guard let error = error as? DecodingError, case .typeMismatch(_, let context) = error else { return false }
+        return !context.codingPath.isEmpty
+    }
+
     /// The settings once `remote` lands on a Mac whose own are `local`, both descended from `base`:
     /// what the other Mac changed comes in, and what this one changed and has not written yet stays.
     /// Applying the whole file undid an edit made in the second before its write — the slider jumped
@@ -98,22 +106,22 @@ struct PortableSettings: Codable, Equatable {
             value.map { min(max($0, range.lowerBound), range.upperBound) }
         }
         var p = self
-        p.iconSize = clamp(iconSize, 24...128)
-        p.iconPadding = clamp(iconPadding, 0...24)
-        p.dockPadding = clamp(dockPadding, 0...24)
-        p.magnifyAmount = clamp(magnifyAmount, 1...2.5)
-        p.barTintIntensity = clamp(barTintIntensity, 0...60)
-        p.barCornerRadius = clamp(barCornerRadius, 8...24)
+        p.iconSize = clamp(iconSize, DockSettings.iconSizeRange)
+        p.iconPadding = clamp(iconPadding, DockSettings.iconPaddingRange)
+        p.dockPadding = clamp(dockPadding, DockSettings.dockPaddingRange)
+        p.magnifyAmount = clamp(magnifyAmount, DockSettings.magnifyAmountRange)
+        p.barTintIntensity = clamp(barTintIntensity, DockSettings.barTintIntensityRange)
+        p.barCornerRadius = clamp(barCornerRadius, DockSettings.barCornerRadiusRange)
         p.weatherLatitude = clamp(weatherLatitude, -90...90)
         p.weatherLongitude = clamp(weatherLongitude, -180...180)
-        p.magnifyReach = clamp(magnifyReach, 1...4)
-        p.hoverIntensity = clamp(hoverIntensity, 0...40)
-        p.previewDelay = clamp(previewDelay, 0...2)
-        p.revealSensitivity = clamp(revealSensitivity, 1...20)
-        p.revealDelay = clamp(revealDelay, 0...2)
-        p.hideDelay = clamp(hideDelay, 0...2)
-        p.revealSpeed = clamp(revealSpeed, 0.25...4)
-        p.hideSpeed = clamp(hideSpeed, 0.25...4)
+        p.magnifyReach = clamp(magnifyReach, DockSettings.magnifyReachRange)
+        p.hoverIntensity = clamp(hoverIntensity, DockSettings.hoverIntensityRange)
+        p.previewDelay = clamp(previewDelay, DockSettings.previewDelayRange)
+        p.revealSensitivity = clamp(revealSensitivity, DockSettings.revealSensitivityRange)
+        p.revealDelay = clamp(revealDelay, DockSettings.revealDelayRange)
+        p.hideDelay = clamp(hideDelay, DockSettings.hideDelayRange)
+        p.revealSpeed = clamp(revealSpeed, DockSettings.revealSpeedRange)
+        p.hideSpeed = clamp(hideSpeed, DockSettings.hideSpeedRange)
         return p
     }
 }
@@ -473,11 +481,16 @@ final class SettingsSync {
         let remote: PortableSettings
         do {
             remote = try PortableSettings.decoded(from: data)
-        } catch DecodingError.typeMismatch(_, let context) where !context.codingPath.isEmpty {
-            // A JSON object whose setting has a type this DockPlus does not know: a newer DockPlus
-            // wrote it. Replaced as corrupt, it lost the newer Mac's settings to this one's, so this
-            // Mac neither adopts nor writes until it is updated.
+        } catch let error where PortableSettings.isFromNewerDockPlus(error) {
+            // A newer DockPlus wrote it. Replaced as corrupt, it lost the newer Mac's settings to this
+            // one's, so this Mac neither adopts nor writes until it is updated. Writing is switched
+            // off, not merely skipped: with it left on, a write already queued or the next change here
+            // went out over the newer file, and that write's success cleared this message. A later
+            // read of a file this DockPlus understands, or of none, switches it back on.
             lastError = "The settings in iCloud are from a newer DockPlus. Update DockPlus to keep syncing."
+            mayWrite = false
+            pendingWrite?.cancel()
+            pendingWrite = nil
             return .pending
         } catch {
             // Corrupt, not merely not here yet: answering .pending forever meant mayWrite never

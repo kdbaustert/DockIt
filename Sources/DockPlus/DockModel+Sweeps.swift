@@ -14,8 +14,9 @@ extension DockModel {
     ///
     /// Only checked, never prompted for: this runs off a timer, and the prompt belongs to a click.
     ///
-    /// `frontmostOnly` asks just the frontmost app and keeps what the last sweep found for the rest.
-    func refreshMinimizedWindows(frontmostOnly: Bool = false) {
+    /// `only` asks just those apps and keeps what the last sweep found for the rest; nil asks
+    /// every regular app.
+    func refreshMinimizedWindows(only pids: Set<pid_t>? = nil) {
         guard settings.showsMinimizedWindows, AXIsProcessTrusted(), WindowActions.getWindowIDFn != nil else {
             if !minimizedWindows.isEmpty {
                 minimizedWindows = []
@@ -29,12 +30,11 @@ extension DockModel {
         guard !isSweepingMinimized else { return }
         isSweepingMinimized = true
         let me = ProcessInfo.processInfo.processIdentifier
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         // Running order, so a partial pass keeps the tiles where they were.
         let order = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.processIdentifier != me }
             .map(\.processIdentifier)
-        let asked = frontmostOnly ? order.filter { $0 == frontmost } : order
+        let asked = pids.map { set in order.filter(set.contains) } ?? order
         Self.axQueue.async { [weak self] in
             let answers = Dictionary(uniqueKeysWithValues: asked.map { ($0, Self.minimizedWindows(of: $0)) })
             DispatchQueue.main.async {
