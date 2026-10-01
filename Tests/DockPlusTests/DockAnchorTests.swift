@@ -40,6 +40,24 @@ final class DockAnchorTests: XCTestCase {
         XCTAssertEqual(anchor.frame(for: oversized, within: screen).minX, 8)
     }
 
+    /// The widest panel that leaves the bar uncovered: the screen inside its margins below a bottom
+    /// dock, only the room beside the bar on a side one — placed at that width, it starts clear of it.
+    func testMaxWidthLeavesTheBarUncovered() {
+        let bottom = DockAnchor(center: 500, dockFrame: NSRect(x: 0, y: 0, width: 1000, height: 120),
+                                edge: .bottom, barReach: 60)
+        XCTAssertEqual(bottom.maxWidth(within: screen), 984)
+        let left = DockAnchor(center: 200, dockFrame: NSRect(x: 0, y: 0, width: 300, height: 800),
+                              edge: .left, barReach: 60)
+        XCTAssertEqual(left.maxWidth(within: screen), 928)
+        let fromLeft = left.frame(for: NSSize(width: left.maxWidth(within: screen), height: 100), within: screen)
+        XCTAssertEqual(fromLeft.minX, 64)
+        let right = DockAnchor(center: 200, dockFrame: NSRect(x: 700, y: 0, width: 300, height: 800),
+                               edge: .right, barReach: 60)
+        XCTAssertEqual(right.maxWidth(within: screen), 928)
+        let fromRight = right.frame(for: NSSize(width: right.maxWidth(within: screen), height: 100), within: screen)
+        XCTAssertEqual(fromRight.maxX, 936)
+    }
+
     /// With no screen to clamp to, the panel goes exactly where the anchor puts it.
     func testUnclampedWithoutAScreen() {
         let dock = NSRect(x: 0, y: 0, width: 1000, height: 120)

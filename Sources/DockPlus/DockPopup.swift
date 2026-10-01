@@ -31,6 +31,20 @@ struct DockAnchor: Equatable {
         }
         return NSRect(origin: origin, size: size)
     }
+
+    /// The widest panel `frame(for:within:)` can place without covering the bar: the screen's width
+    /// inside its 8pt margins below a bottom dock, but only the room beside the bar on a side dock —
+    /// capped at the screen's width there, a preview of six windows or more slid back over the bar
+    /// and took the clicks meant for its icons. Pure, for the tests.
+    func maxWidth(within visible: NSRect) -> CGFloat {
+        let gap = barReach + 4.0
+        let room = switch edge {
+        case .bottom: visible.width - 16
+        case .left: visible.maxX - 8 - (dockFrame.minX + gap)
+        case .right: dockFrame.maxX - gap - (visible.minX + 8)
+        }
+        return max(room, 0)
+    }
 }
 
 /// Same shape as `DockPanel`, above the dock's own level as a menu would be. The previews' panel is

@@ -108,10 +108,10 @@ if [[ "${1:-}" == "--install" ]]; then
     STAGED="/Applications/.DockPlus-installing"
     rm -rf "$STAGED"
     cp -R "$APP" "$STAGED"
-    # SIGTERM, not `quit app`: a real quit restores the macOS Dock, and the relaunch below would
-    # hide it again — two Dock restarts per install. Killed, DockPlus leaves the Dock hidden and its
-    # saved originals in place, and the new copy finds nothing to change.
-    pkill -x DockPlus 2>/dev/null || true
+    # SIGUSR1, not `quit app` or SIGTERM: both of those restore the macOS Dock, and the relaunch
+    # below would hide it again — two Dock restarts per install. On SIGUSR1 DockPlus exits leaving
+    # the Dock hidden and its saved originals in place, and the new copy finds nothing to change.
+    pkill -USR1 -x DockPlus 2>/dev/null || true
     for _ in $(seq 1 30); do
         pgrep -x DockPlus >/dev/null 2>&1 || break
         sleep 0.1

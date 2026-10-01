@@ -17,10 +17,11 @@ extension WidgetsModel {
                                   (name: "Music", bundleID: "com.apple.Music")]
 
     func configurePlayer() {
-        guard settings.showsNowPlaying else {
+        guard settings.showsNowPlaying, widgetsOnBar else {
             playerNotices = nil
             trackTitle = nil
             deniedPlayer = nil
+            watchPlayerAccess()
             clearArtwork()
             return
         }
@@ -33,7 +34,7 @@ extension WidgetsModel {
     private static let separator = "␟"
 
     private func pollPlayer() {
-        guard settings.showsNowPlaying else { return }
+        guard settings.showsNowPlaying, widgetsOnBar else { return }
         if isPollingPlayer {
             needsPlayerRepoll = true
             return
@@ -87,8 +88,9 @@ extension WidgetsModel {
                 }
             }
             // Switched off while the poll ran: configurePlayer has already cleared the tile.
-            guard settings.showsNowPlaying else { return }
+            guard settings.showsNowPlaying, widgetsOnBar else { return }
             deniedPlayer = shown == nil ? denied : nil
+            watchPlayerAccess()
             guard let shown else {
                 trackTitle = nil
                 clearArtwork()
@@ -101,6 +103,43 @@ extension WidgetsModel {
             trackArtist = shown.parts[2]
             await loadArtwork(shown.parts.count > 3 ? shown.parts[3] : "")
         }
+    }
+
+    /// Automation granted in System Settings announces nothing, and a paused player sends no notice
+    /// to poll on, so the tile stayed on Not Allowed until the track changed. As the calendar's
+    /// access watch: while a player is refused, each app switch asks TCC again — one question, no
+    /// prompt, and no osascript launched to ask it — and polls once the answer is yes.
+    private func watchPlayerAccess() {
+        guard deniedPlayer != nil else {
+            if let playerAccessWatch { NSWorkspace.shared.notificationCenter.removeObserver(playerAccessWatch) }
+            playerAccessWatch = nil
+            return
+        }
+        guard playerAccessWatch == nil else { return }
+        playerAccessWatch = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let denied = self.deniedPlayer,
+                      let bundleID = Self.players.first(where: { $0.name == denied })?.bundleID,
+                      Self.mayScript(bundleID)
+                else { return }
+                self.pollPlayer()
+            }
+        }
+    }
+
+    /// Whether Automation of the app is allowed, without asking the user. Anything but a yes —
+    /// refused, never asked, or the app not running — reads as no.
+    private static func mayScript(_ bundleID: String) -> Bool {
+        var target = AEAddressDesc()
+        let created = bundleID.withCString {
+            AECreateDesc(DescType(typeApplicationBundleID), $0, strlen($0), &target)
+        }
+        guard created == noErr else { return false }
+        defer { AEDisposeDesc(&target) }
+        return AEDeterminePermissionToAutomateTarget(
+            &target, AEEventClass(typeWildCard), AEEventID(typeWildCard), false) == noErr
     }
 
     /// With the remembered URL: otherwise the same track coming back would match it and skip the
@@ -131,7 +170,8 @@ extension WidgetsModel {
     func previousTrack() { control("previous track") }
 
     private func control(_ command: String) {
-        guard let player else { return }
+        // No player while one is refused: asking again is what notices the permission granted.
+        guard let player else { return pollPlayer() }
         let script = "tell application \"\(player)\" to \(command)"
         Task {
             _ = await Self.runAppleScript(script)

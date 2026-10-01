@@ -120,8 +120,9 @@ final class PreviewController {
         }
 
         captureTask?.cancel()
+        let scale = clampScreen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
         captureTask = Task { [weak self] in
-            let captured = await WindowCapture.thumbnails(pid: pid, maxHeight: Self.thumbHeight)
+            let captured = await WindowCapture.thumbnails(pid: pid, maxHeight: Self.thumbHeight, scale: scale)
             guard let self, !Task.isCancelled, shownItemID == item.id else { return }
             captureTask = nil
             let thumbs = onThisDisplay(captured)
@@ -213,8 +214,13 @@ final class PreviewController {
         let visible = (clampScreen ?? NSScreen.screens.first)?.visibleFrame
         var size = host.fittingSize
         // Enough windows outgrow the screen, and a panel wider than `visible` slid its left edge
-        // off it. The thumbnails are flexible, so a narrower panel shrinks them to fit instead.
-        if let visible { size.width = min(size.width, visible.width - 16) }
+        // off it. The thumbnails are flexible, so a narrower panel shrinks them to fit instead —
+        // and, narrower, they are shorter: measured again at that width, or the strip sat centred
+        // in a panel as tall as the full-width one, with a gap under it.
+        if let visible, case let room = anchor.maxWidth(within: visible), size.width > room {
+            host.rootView = AnyView(view.frame(width: room))
+            size = NSSize(width: room, height: host.fittingSize.height)
+        }
         panel.setFrame(anchor.frame(for: size, within: visible), display: true)
         panel.orderFrontRegardless()
     }
@@ -250,7 +256,7 @@ private struct PreviewStrip: View {
                             Spacer(minLength: 0)
                         }
                     }
-                    Image(decorative: thumb.image, scale: 1)
+                    Image(decorative: thumb.image, scale: thumb.scale)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 220, maxHeight: 140)

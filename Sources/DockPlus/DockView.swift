@@ -266,7 +266,10 @@ private struct DockItemMenu: View {
             if item.isRunning, let pid = item.pid {
                 AppWindowList(pid: pid, model: model)
                 Button("Show All Windows") { model.showAllWindows(item) }
-                // Read as the menu is built, which is when it opens; nothing observes it otherwise.
+                // Read as the menu is built, and built again on every open through `menusOpened`:
+                // hiding an app changes nothing else the menu reads, so a reopened menu went on
+                // offering Hide for a hidden app.
+                let _ = model.menusOpened
                 if NSRunningApplication(processIdentifier: pid)?.isHidden == true {
                     Button("Unhide") { model.unhide(item) }
                 } else {

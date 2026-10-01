@@ -20,6 +20,24 @@ final class PortableSettingsTests: XCTestCase {
         XCTAssertNil(partial.pinnedApps)
     }
 
+    /// A file landing in the second before this Mac's write: what the other Mac changed comes in,
+    /// this Mac's unsent edit stays, and where both changed a setting the file wins.
+    func testMergeKeepsUnsentEditsAndTakesTheirs() {
+        let base = PortableSettings(iconSize: 48, magnifies: true, barTint: "none")
+        let local = PortableSettings(iconSize: 64, magnifies: false, barTint: "none")
+        let remote = PortableSettings(iconSize: 48, magnifies: true, showsKeepAwake: true, barTint: "blue")
+        let merged = PortableSettings.merged(local: local, remote: remote, base: base)
+        XCTAssertEqual(merged.iconSize, 64)
+        XCTAssertEqual(merged.magnifies, false)
+        XCTAssertEqual(merged.barTint, "blue")
+        XCTAssertEqual(merged.showsKeepAwake, true)
+
+        let conflicting = PortableSettings(iconSize: 32, magnifies: true, barTint: "none")
+        XCTAssertEqual(PortableSettings.merged(local: local, remote: conflicting, base: base).iconSize, 32)
+        // Nothing changed on this Mac: the file applies whole, as before.
+        XCTAssertEqual(PortableSettings.merged(local: base, remote: remote, base: base), remote)
+    }
+
     /// Same settings, same bytes — how sync recognises a file it already agrees with.
     func testEncodingIsStable() throws {
         let settings = PortableSettings(iconSize: 48, pinnedApps: ["/b.app", "/a.app"])

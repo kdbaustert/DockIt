@@ -4,7 +4,7 @@ extension WidgetsModel {
     func configureClock() {
         clockTimer?.invalidate()
         clockTimer = nil
-        guard settings.showsClock || isPreviewing else { return }
+        guard settings.showsClock && widgetsOnBar || isPreviewing else { return }
         // New instances, not a new `dateFormat` on the old ones: the per-tick formatters these
         // replace picked up a new time zone or locale for free, and this keeps that without relying
         // on whether a long-lived formatter would follow either change on its own.

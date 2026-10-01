@@ -56,7 +56,7 @@ extension WidgetsModel {
     /// measured — and every visit to the Widgets pane made one; the same source re-added costs none.
     func configureBattery() {
         let main = CFRunLoopGetMain()
-        guard settings.showsBattery || isPreviewing, Self.hasBattery else {
+        guard settings.showsBattery && widgetsOnBar || isPreviewing, Self.hasBattery else {
             if let batterySource { CFRunLoopRemoveSource(main, batterySource, .commonModes) }
             battery = nil
             return

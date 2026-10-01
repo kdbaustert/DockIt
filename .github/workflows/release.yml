@@ -196,6 +196,7 @@ jobs:
           BETA: ${{ steps.version.outputs.beta }}
           EXISTS: ${{ steps.existing.outputs.exists }}
           REUSE: ${{ steps.existing.outputs.reuse }}
+          CODESIGN_IDENTITY: ${{ steps.codesign.outputs.identity }}
         run: |
           set -euo pipefail
           ASSET="build/releases/DockPlus-$VERSION.zip"
@@ -213,7 +214,18 @@ jobs:
           if [[ "$BETA" == "1" ]]; then
             PRERELEASE=(--prerelease --latest=false)
           fi
-          NOTES=$'This build is ad-hoc signed, not notarised — there is no Apple Developer Program\nmembership behind it yet. macOS Gatekeeper will call the download damaged or from an\nunidentified developer on first launch. To open it: right-click DockPlus.app → Open, or run\n`xattr -cr /path/to/DockPlus.app` in Terminal.\n\n'
+          # Signed as the signing step left it: with the secrets set, the notice said "ad-hoc" all
+          # the same.
+          SIGNING="ad-hoc signed"
+          if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+            SIGNING="signed with DockPlus's own certificate rather than an Apple Developer ID"
+          fi
+          printf -v NOTES '%s\n' \
+            "This build is $SIGNING, not notarised — there is no Apple Developer Program" \
+            "membership behind it yet. macOS Gatekeeper will call the download damaged or from an" \
+            "unidentified developer on first launch. To open it: right-click DockPlus.app → Open, or run" \
+            '`xattr -cr /path/to/DockPlus.app` in Terminal.' \
+            ""
           # --generate-notes adds the changes since the last tag after the notice above.
           gh release create "$TAG" "$ASSET" \
             --title "DockPlus $VERSION" \

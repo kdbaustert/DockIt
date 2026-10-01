@@ -10,6 +10,8 @@ struct WindowThumb: Identifiable, @unchecked Sendable {
     /// Where the window is, in window-server coordinates (y down from the primary display's top).
     let frame: CGRect
     let image: CGImage
+    /// Pixels per point in `image`: drawn at this scale, it keeps its size in points on any display.
+    let scale: CGFloat
 }
 
 /// One-shot thumbnails of an app's windows — ScreenCaptureKit screenshots, never a stream. ScreenCaptureKit rather than Accessibility decides
@@ -27,9 +29,10 @@ enum WindowCapture {
         CGRequestScreenCaptureAccess()
     }
 
-    /// Front-to-back thumbnails of `pid`'s windows. Empty when permission is missing, the app has no
-    /// windows, or the list cannot be read.
-    nonisolated static func thumbnails(pid: pid_t, maxHeight: CGFloat) async -> [WindowThumb] {
+    /// Front-to-back thumbnails of `pid`'s windows, at most `maxHeight` points tall, `scale` pixels to
+    /// the point — the display's backing scale, or a Retina panel showed them upscaled and soft.
+    /// Empty when permission is missing, the app has no windows, or the list cannot be read.
+    nonisolated static func thumbnails(pid: pid_t, maxHeight: CGFloat, scale: CGFloat = 1) async -> [WindowThumb] {
         // Cancelled between steps: the pointer sweeping along the bar with the panel up cancels a
         // capture per icon passed, and each ran to the end regardless — a window list, an AX query
         // and up to ten screenshots nobody would see.
@@ -52,7 +55,7 @@ enum WindowCapture {
             return window.isOnScreen || isOnSomeSpace(window.windowID) || axClaimed.contains(window.windowID)
         }.prefix(10)
         guard !Task.isCancelled else { return [] }
-        return await captureAll(Array(windows), maxHeight: maxHeight)
+        return await captureAll(Array(windows), maxHeight: maxHeight, scale: scale)
     }
 
     /// Several windows by id from one enumeration of the window list — the minimized-window tiles,
@@ -63,12 +66,14 @@ enum WindowCapture {
               let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
         else { return [] }
         let wanted = Set(ids)
-        return await captureAll(content.windows.filter { wanted.contains($0.windowID) }, maxHeight: maxHeight)
+        return await captureAll(content.windows.filter { wanted.contains($0.windowID) }, maxHeight: maxHeight, scale: 1)
     }
 
     /// In parallel, but back in the order given — front-to-back, for a pid's windows. A blank capture
     /// is no picture and is left out, which keeps a minimized tile on its app-icon fallback.
-    private nonisolated static func captureAll(_ windows: [SCWindow], maxHeight: CGFloat) async -> [WindowThumb] {
+    private nonisolated static func captureAll(
+        _ windows: [SCWindow], maxHeight: CGFloat, scale: CGFloat
+    ) async -> [WindowThumb] {
         // SCWindow is not Sendable; the wrapper only carries it into the child task.
         struct Job: @unchecked Sendable {
             let index: Int
@@ -79,12 +84,13 @@ enum WindowCapture {
             for job in jobs {
                 group.addTask {
                     guard !Task.isCancelled,
-                          let image = await capture(job.window, maxHeight: maxHeight), !isBlank(image) else {
+                          let image = await capture(job.window, maxHeight: maxHeight, scale: scale),
+                          !isBlank(image) else {
                         return nil
                     }
                     return (job.index, WindowThumb(
                         id: job.window.windowID, title: job.window.title ?? "", frame: job.window.frame,
-                        image: image))
+                        image: image, scale: scale))
                 }
             }
             var out: [(Int, WindowThumb)] = []
@@ -163,12 +169,12 @@ enum WindowCapture {
     }
 
     /// Captured straight at thumbnail size rather than scaled afterwards.
-    private nonisolated static func capture(_ window: SCWindow, maxHeight: CGFloat) async -> CGImage? {
+    private nonisolated static func capture(_ window: SCWindow, maxHeight: CGFloat, scale: CGFloat) async -> CGImage? {
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
-        let scale = min(1, maxHeight / max(window.frame.height, 1))
-        config.width = max(Int(window.frame.width * scale), 1)
-        config.height = max(Int(window.frame.height * scale), 1)
+        let pixelsPerPoint = min(1, maxHeight / max(window.frame.height, 1)) * scale
+        config.width = max(Int(window.frame.width * pixelsPerPoint), 1)
+        config.height = max(Int(window.frame.height * pixelsPerPoint), 1)
         config.showsCursor = false
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }

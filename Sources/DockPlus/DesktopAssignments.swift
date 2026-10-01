@@ -101,15 +101,16 @@ enum DesktopAssignments {
     /// has no such item — or has one that, pressed, did not save `target`. Off the main thread: the
     /// Dock's menu takes a moment to open.
     static func assign(_ bundleID: String, to target: Assignment, title: String, app: URL) {
-        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
-              AXIsProcessTrusted()
-        else {
+        guard AXIsProcessTrusted() else {
             write(bundleID, target)
             return
         }
-        let pid = dock.processIdentifier
         pressQueue.async {
-            guard !(pressDockMenuItem(title, for: app, dockPID: pid) && awaitBinding(bundleID, target)) else { return }
+            // Looked up here, not at the click: a pick queued behind one that restarted the Dock would
+            // otherwise press a Dock that has since exited.
+            if let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
+                .first?.processIdentifier,
+               pressDockMenuItem(title, for: app, dockPID: pid), awaitBinding(bundleID, target) { return }
             // Sync, so the next pick waits for this one's write: queued after it instead, an earlier
             // pick's write could land after a later pick and undo it.
             DispatchQueue.main.sync { MainActor.assumeIsolated { write(bundleID, target) } }
@@ -136,11 +137,13 @@ enum DesktopAssignments {
     private nonisolated static func pressDockMenuItem(_ title: String, for app: URL, dockPID: pid_t) -> Bool {
         let dock = AXUIElementCreateApplication(dockPID)
         AXUIElementSetMessagingTimeout(dock, 0.3)
-        let target = app.resolvingSymlinksInPath().standardizedFileURL
+        // By path: the Dock's tile URLs end in a slash, and one built from a symlinked bundle's path
+        // (/Applications/Safari.app) does not, so as URLs they never matched.
+        let target = DockModel.key(app)
         let tile = WindowActions.children(of: dock).lazy.flatMap(WindowActions.children(of:)).first { tile in
             var value: CFTypeRef?
             return AXUIElementCopyAttributeValue(tile, kAXURLAttribute as CFString, &value) == .success
-                && (value as? URL)?.resolvingSymlinksInPath().standardizedFileURL == target
+                && (value as? URL).map(DockModel.key) == target
         }
         guard let tile, AXUIElementPerformAction(tile, "AXShowMenu" as CFString) == .success else { return false }
         // Readable after 12–130 ms in every measurement; half a second before giving up.

@@ -35,7 +35,7 @@ extension WidgetsModel {
         calendarAccessWatch = nil
         calendarTitle = nil
         calendarTime = ""
-        guard settings.showsCalendar else { return }
+        guard settings.showsCalendar, widgetsOnBar else { return }
         calendarAccess = Self.currentCalendarAccess()
         guard calendarAccess == .granted else { return watchCalendarAccess() }
         let store = EKEventStore()

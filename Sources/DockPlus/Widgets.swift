@@ -37,6 +37,9 @@ final class WidgetsModel {
     var deniedPlayer: String?
     /// Which player answered last — where the controls go.
     var player: String?
+    /// Watches app switches only while a player is refused, to notice Automation being granted in
+    /// System Settings; see `watchPlayerAccess`.
+    @ObservationIgnored var playerAccessWatch: NSObjectProtocol?
     @ObservationIgnored var artworkURL: String?
 
     // MARK: Battery
@@ -55,6 +58,11 @@ final class WidgetsModel {
     var keepAwakeUntil: Date?
     /// `keepAwakeUntil` as the tile shows it.
     var keepAwakeEnd = ""
+
+    /// Widgets are drawn on a bottom dock only (`DockModel.showItems`). On a side dock no tile shows,
+    /// so none of them runs: keep awake held the display awake with nothing on screen to say so, and
+    /// the weather went on fetching for a tile no one could see.
+    var widgetsOnBar: Bool { settings.edge == .bottom }
 
     /// Set while Settings' gallery shows the tiles, so the clock and battery previews read true with
     /// the widget off. Only those two: they cost a minute timer and a power notice, where weather
@@ -107,33 +115,33 @@ final class WidgetsModel {
         // One observation per source, each reading only its own settings: typing a weather location
         // must not re-poll the players or rebuild the clock's timer.
         observeContinuously(ownedBy: self) { [unowned self] in
-            _ = (settings.showsClock, settings.clock24Hour, isPreviewing)
+            _ = (settings.showsClock, settings.clock24Hour, isPreviewing, settings.edge)
         } onChange: { [weak self] in
             self?.configureClock()
         }
         observeContinuously(ownedBy: self) { [settings] in
             _ = (settings.showsWeather, settings.weatherLocation, settings.weatherFahrenheit,
-                 settings.weatherLatitude, settings.weatherLongitude)
+                 settings.weatherLatitude, settings.weatherLongitude, settings.edge)
         } onChange: { [weak self] in
             self?.configureWeather()
         }
         observeContinuously(ownedBy: self) { [settings] in
-            _ = settings.showsNowPlaying
+            _ = (settings.showsNowPlaying, settings.edge)
         } onChange: { [weak self] in
             self?.configurePlayer()
         }
         observeContinuously(ownedBy: self) { [unowned self] in
-            _ = (settings.showsBattery, isPreviewing)
+            _ = (settings.showsBattery, isPreviewing, settings.edge)
         } onChange: { [weak self] in
             self?.configureBattery()
         }
         observeContinuously(ownedBy: self) { [settings] in
-            _ = (settings.showsCalendar, settings.clock24Hour)
+            _ = (settings.showsCalendar, settings.clock24Hour, settings.edge)
         } onChange: { [weak self] in
             self?.configureCalendar()
         }
         observeContinuously(ownedBy: self) { [settings] in
-            _ = (settings.showsKeepAwake, settings.clock24Hour)
+            _ = (settings.showsKeepAwake, settings.clock24Hour, settings.edge)
         } onChange: { [weak self] in
             self?.configureKeepAwake()
         }
@@ -143,7 +151,9 @@ final class WidgetsModel {
         // the formatters stopped being made every tick, which had picked up a new locale's AM/PM and
         // day names within the minute. The calendar's one-shot timer has the same clock, and its
         // "today" and times the same time zone and locale, so it re-reads on all four too, and so
-        // does keep awake's end.
+        // does keep awake's end. The weather's 15-minute timer stops with it as well: after a night
+        // asleep the tile showed last night's reading for up to 15 minutes — fetched again at once,
+        // with the usual retry should the network not be back yet.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -151,6 +161,7 @@ final class WidgetsModel {
                 self?.configureClock()
                 self?.refreshCalendar()
                 self?.refreshKeepAwake()
+                self?.configureWeather()
             }
         }
         for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange,

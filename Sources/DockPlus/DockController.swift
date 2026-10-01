@@ -47,6 +47,9 @@ final class DockController {
     private var overlapTimer: Timer?
     /// On NSWorkspace's own centre, so kept apart from `observers` for removal.
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// False while the panel's Space is not in front — a full-screen app's, where the panel, as the
+    /// real Dock, does not appear. Cached, not asked per tick: the ticks run at display rate.
+    private var isOnActiveSpace = true
 
     /// Nil while no screen is attached at all — display sleep or an unplug on a headless-capable Mac
     /// empties the list, and indexing it then would trap.
@@ -88,6 +91,7 @@ final class DockController {
             MainActor.assumeIsolated {
                 self?.openMenus += 1
                 self?.previews.hide()
+                self?.refreshMenuWindows()
             }
         })
         observers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
@@ -99,7 +103,10 @@ final class DockController {
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             workspaceObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshOverlap() }
+                MainActor.assumeIsolated {
+                    self?.refreshActiveSpace()
+                    self?.refreshOverlap()
+                }
             })
         }
         trackSettings()
@@ -183,6 +190,17 @@ final class DockController {
         grid.close()
     }
 
+    /// The window list of the app whose menu just opened — the hovered one, which is the one
+    /// right-clicked. SwiftUI shows a reopened menu as it built it last, and asks for the list only
+    /// when it builds it, so a window closed since stayed listed. Only this app's: rebuilding every
+    /// cached menu would queue an Accessibility query per app ahead of the one being opened.
+    private func refreshMenuWindows() {
+        guard let id = hoveredItemID, let item = model.items.first(where: { $0.id == id }),
+              item.kind == .app, item.isRunning, let pid = item.pid
+        else { return }
+        model.requestMenuWindows(for: pid)
+    }
+
     private func layoutPanel() {
         guard let screen = self.screen else { return }
         let metrics = model.metrics
@@ -240,6 +258,7 @@ final class DockController {
             previews.hide()
             grid.close()
             layoutPanel()
+            refreshActiveSpace()
             return
         }
         let frame = panel.frame
@@ -250,7 +269,9 @@ final class DockController {
         }
         let layout = model.layout(for: state)
         let metrics = layout.metrics
-        let onEdge = along >= 0 && along <= state.stripLength && across >= -1
+        // On a full-screen app's Space the bar is not there: the pointer along the bottom of a video
+        // polled at display rate, laying out and previewing a bar no one could see.
+        let onEdge = isOnActiveSpace && along >= 0 && along <= state.stripLength && across >= -1
         let reach = barReach(layout)
         let overBar = onEdge && !state.isHidden
             && along >= layout.start && along <= layout.start + layout.length && across <= reach
@@ -265,8 +286,11 @@ final class DockController {
         // the pointer as off their bar and closed the gap this one had just set — the icons
         // flickered apart and together, and a drop could land with no gap left to commit. In every
         // other mode this is the only controller, so it must track wherever the pointer is.
-        if model.drag != nil,
-            settings.displayMode != .all || NSMouseInRect(mouse, screen.frame, false) {
+        if model.drag == nil {
+            // A drop on the bar ends the drag inside the grace period, with no tick left to clear
+            // the release; kept, it ended the next drag at its first tick, as released near the bar.
+            dragRelease = nil
+        } else if settings.displayMode != .all || NSMouseInRect(mouse, screen.frame, false) {
             trackDrag(over: hoveredIndex, awayFromBar: across > reach + metrics.iconSize)
         }
         // Nothing is hovered while an icon is carried: no preview, and no name over the gap.
@@ -318,7 +342,9 @@ final class DockController {
         // now it drops to 10 Hz, and off the bar from there to idle. The first move back costs up
         // to one slow tick before the rate returns.
         let nearZone = state.isHidden ? 20 : metrics.magnifiedSize + 2 * metrics.padding + 40
-        let fast = onEdge && across < nearZone && !inGrid && stillTicks < Self.slowAfterStillTicks
+        // Throughout a drag too, so a tap of Esc is not missed between slow ticks; see `trackDrag`.
+        let fast = model.drag != nil
+            || (onEdge && across < nearZone && !inGrid && stillTicks < Self.slowAfterStillTicks)
         if !fast, canIdle() {
             goIdle()
         } else {
@@ -355,6 +381,14 @@ final class DockController {
     /// from the release, not read after the grace, by which time the pointer has moved. No puff of
     /// smoke: `NSAnimationEffect` is deprecated since macOS 14, and its replacement is only a cursor.
     private func trackDrag(over index: Int?, awayFromBar: Bool) {
+        // Esc cancels the drag, but the button is still held: the gap went on following the pointer,
+        // and letting go clear of the bar then removed the item. Read off the keyboard's state, not
+        // an event: the key goes to the app in front, which is rarely DockPlus.
+        if CGEventSource.keyState(.combinedSessionState, key: Self.escapeKey) {
+            dragRelease = nil
+            withAnimation(.smooth(duration: 0.25)) { model.endDrag() }
+            return
+        }
         guard NSEvent.pressedMouseButtons == 0 else {
             dragRelease = nil
             withAnimation(.smooth(duration: 0.2)) { model.moveDrag(over: index) }
@@ -368,6 +402,9 @@ final class DockController {
             if !release.away || !model.endDragRemoving() { model.endDrag() }
         }
     }
+
+    /// kVK_Escape, without importing Carbon for one constant.
+    private static let escapeKey: CGKeyCode = 0x35
 
     /// The timer stops and the first mouse event of any kind starts it again. The monitors are
     /// removed as soon as one fires, so a moving pointer costs the 10 Hz poll, not an event per
@@ -435,7 +472,7 @@ final class DockController {
             } else {
                 edgeHeldAt = nil
             }
-        } else if overBar || openMenus > 0 || previews.keepsDockShown || grid.isShown {
+        } else if overBar || openMenus > 0 || previews.keepsDockShown || grid.isShown || model.drag != nil {
             leftBarAt = nil
         } else if let left = leftBarAt {
             guard Date().timeIntervalSince(left) > settings.hideDelay else { return }
@@ -460,6 +497,10 @@ final class DockController {
         // The speed settings are multipliers on the stock quarter-second-ish slide.
         let speed = max(hidden ? settings.hideSpeed : settings.revealSpeed, 0.1)
         withAnimation(.easeInOut(duration: 0.2 / speed)) { state.isHidden = hidden }
+    }
+
+    private func refreshActiveSpace() {
+        isOnActiveSpace = panel.isOnActiveSpace
     }
 
     // MARK: - Overlap

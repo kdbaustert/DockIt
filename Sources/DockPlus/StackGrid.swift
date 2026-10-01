@@ -192,6 +192,10 @@ private struct StackGridView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
+                    // No ideal width of its own, so the grid sizes the panel and a long folder name
+                    // truncates — its one-line width had pushed the panel off the screen (measured:
+                    // 264 characters made it 1732pt wide, against the grid's 302).
+                    .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .accessibilityAddTraits(.isHeader)
             }
             content

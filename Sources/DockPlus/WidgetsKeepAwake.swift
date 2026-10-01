@@ -10,9 +10,10 @@ extension WidgetsModel {
     // system awake too. macOS drops it with the process, so a quit or a crash cannot leave the Mac
     // unable to sleep, and it is never saved: a relaunch starts off.
 
-    /// Turns the widget off with the tile: nothing else is left to show it is on.
+    /// Turns the widget off with the tile — removed, or not drawn on a side dock: nothing else is
+    /// left to show it is on.
     func configureKeepAwake() {
-        guard settings.showsKeepAwake else {
+        guard settings.showsKeepAwake, widgetsOnBar else {
             stopKeepingAwake()
             return
         }

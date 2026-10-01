@@ -75,10 +75,12 @@ enum LoginItems {
         guard let snapshot, let resolve,
               let items = snapshot(list, nil)?.takeRetainedValue() as? [AnyObject]
         else { return nil }
-        let target = app.resolvingSymlinksInPath().standardizedFileURL
+        // By path, as the Dock's tiles are matched: a resolved item's URL ends in a slash where one
+        // built from a symlinked bundle's path does not.
+        let target = DockModel.key(app)
         return items.first { item in
             let url = resolve(item, resolveFlags, nil)?.takeRetainedValue() as URL?
-            return url?.resolvingSymlinksInPath().standardizedFileURL == target
+            return url.map(DockModel.key) == target
         }
     }
 

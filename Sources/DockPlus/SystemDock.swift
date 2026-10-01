@@ -59,24 +59,37 @@ enum SystemDock {
     }
 
     static func restore() {
+        // Hiding again after a restore is a fresh start, not a fourth try: three failures used to
+        // stop every later hide until a relaunch.
+        failedAttempts = 0
         let store = UserDefaults.standard
         guard let saved = store.dictionary(forKey: savedKey) else { return }
         isRestoring = true
         defer { isRestoring = false }
         var succeeded = true
-        if let value = saved["autohide"] as? Bool {
-            succeeded = defaults(["write", domain, "autohide", "-bool", value ? "true" : "false"]) && succeeded
-        } else {
-            succeeded = delete("autohide") && succeeded
-        }
-        if let value = saved["autohide-delay"] as? Double {
-            succeeded = defaults(["write", domain, "autohide-delay", "-float", String(value)]) && succeeded
-        } else {
-            succeeded = delete("autohide-delay") && succeeded
+        for key in ["autohide", "autohide-delay"] {
+            succeeded = put(key, saved[key]) && succeeded
         }
         // Only once the Dock really has the originals back; otherwise they are the only copy left.
         if succeeded { store.removeObject(forKey: savedKey) }
         run("/usr/bin/killall", ["Dock"])
+    }
+
+    /// A saved original written back with the type it was saved with. An untyped
+    /// `defaults write com.apple.dock autohide YES` stores a string, which the Dock reads as true;
+    /// restoring only a Bool deleted it, and the user's own setting was lost with the saved copy.
+    /// A key that was absent when captured is deleted.
+    private static func put(_ key: String, _ value: Any?) -> Bool {
+        switch value {
+        case let string as String:
+            defaults(["write", domain, key, "-string", string])
+        case let number as NSNumber where CFGetTypeID(number) == CFBooleanGetTypeID():
+            defaults(["write", domain, key, "-bool", number.boolValue ? "true" : "false"])
+        case let number as NSNumber:
+            defaults(["write", domain, key, CFNumberIsFloatType(number) ? "-float" : "-int", number.stringValue])
+        default:
+            delete(key)
+        }
     }
 
     /// `defaults delete` exits non-zero for a key that is already absent, which is the outcome

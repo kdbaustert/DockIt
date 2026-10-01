@@ -69,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarItem = MenuBarItem(settings: settings, updater: updater)
         settingsSync = SettingsSync(settings: settings)
+        // Before the hide: a kill during its waits otherwise took the default action, mid-change.
+        installSignalHandlers()
         if settings.hidesSystemDock {
             SystemDock.hide()
         } else {
@@ -76,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // finish it now. A no-op when nothing is saved.
             SystemDock.restore()
         }
-        installSignalHandlers()
         startWatchdog()
         observeContinuously(ownedBy: self) { [settings] in
             _ = settings.hidesSystemDock
@@ -109,17 +110,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// signals: the process exits with no delegate callback (SIGTERM measured: status 143), and the
     /// macOS Dock stayed hidden with nothing left to bring it back. Dispatch sources rather than
     /// `signal` handlers, which may only call async-signal-safe functions — a restore runs
-    /// `defaults` and `killall`. Same rule as the system-quit path in `applicationShouldTerminate`:
-    /// with the login item on, the next login re-hides anyway, and restoring would only flash the
-    /// Dock through it. SIGKILL and real crashes cannot be caught; after those the saved originals
-    /// survive, and the next launch resumes hiding from them or finishes the restore.
+    /// `defaults` and `killall`. Restored even with the login item on, unlike the system-quit path in
+    /// `applicationShouldTerminate`: a logout quits through that path, so a signal is nearly always
+    /// mid-session, and skipping the restore left the rest of the session with no dock at all. SIGUSR1
+    /// is the one exit that keeps the Dock hidden: `build.sh --install` sends it, so the copy it
+    /// launches next finds nothing to change rather than restarting the Dock a second time. SIGKILL
+    /// and real crashes cannot be caught; after those the saved originals survive, and the next launch
+    /// resumes hiding from them or finishes the restore.
     private func installSignalHandlers() {
-        for sig in [SIGTERM, SIGINT, SIGHUP] {
+        for sig in [SIGTERM, SIGINT, SIGHUP, SIGUSR1] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
-                    if let self, self.settings.hidesSystemDock, SMAppService.mainApp.status != .enabled {
+                    if sig != SIGUSR1, let self, self.settings.hidesSystemDock {
                         // The watchdog would re-hide the Dock from inside the restore, whose waits
                         // spin the run loop.
                         self.watchdog?.invalidate()

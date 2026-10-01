@@ -9,7 +9,7 @@ extension WidgetsModel {
         weatherTask?.cancel()
         weatherRetry?.cancel()
         weatherRetry = nil
-        guard settings.showsWeather, !settings.weatherLocation.isEmpty else {
+        guard settings.showsWeather, widgetsOnBar, !settings.weatherLocation.isEmpty else {
             // All of the reading: the temperature alone left the old city and its high and low.
             weatherTemperature = nil
             weatherPlace = ""

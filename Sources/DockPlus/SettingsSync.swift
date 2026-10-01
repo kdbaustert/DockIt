@@ -74,6 +74,23 @@ struct PortableSettings: Codable, Equatable {
         try JSONDecoder().decode(PortableSettings.self, from: data)
     }
 
+    /// The settings once `remote` lands on a Mac whose own are `local`, both descended from `base`:
+    /// what the other Mac changed comes in, and what this one changed and has not written yet stays.
+    /// Applying the whole file undid an edit made in the second before its write — the slider jumped
+    /// back, and since the file was then agreed, the edit was never sent. A setting both changed
+    /// takes the file's value: last writer wins, as ever. Pure, for the tests.
+    static func merged(local: PortableSettings, remote: PortableSettings, base: PortableSettings) -> PortableSettings {
+        func fields(_ settings: PortableSettings) -> [String: Any]? {
+            (try? settings.encoded()).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        }
+        guard var out = fields(local), let theirs = fields(remote), let before = fields(base) else { return remote }
+        for key in Set(theirs.keys).union(before.keys)
+        where (theirs[key] as? NSObject) != (before[key] as? NSObject) {
+            out[key] = theirs[key]
+        }
+        return (try? JSONSerialization.data(withJSONObject: out)).flatMap { try? decoded(from: $0) } ?? remote
+    }
+
     /// Every number pulled into the range its Settings slider offers. A file is outside input: one
     /// carrying 1e20 would reach the sliders' `Int(value)` labels, which trap on it.
     func clamped() -> PortableSettings {
@@ -259,6 +276,11 @@ final class SettingsSync {
     /// The settings the file and this Mac last agreed on. A change that matches it — the echo of
     /// applying the file, or a file this Mac wrote itself — is not sent back round.
     @ObservationIgnored private var agreed: PortableSettings?
+    /// This Mac's settings as sync started: what a file landing before any agreement is merged
+    /// against, so an edit made while the first read was pending survives it.
+    @ObservationIgnored private var startedWith: PortableSettings?
+    /// When the file was first found missing, before this Mac has agreed on one; see `readRemote`.
+    @ObservationIgnored private var absentSince: Date?
     /// Whether this Mac may write: only once it has adopted the file, or seen that there is none.
     /// Until then a write would put this Mac's settings over another's that simply had not
     /// downloaded yet — at a launch offline, or before iCloud had fetched the file.
@@ -296,20 +318,20 @@ final class SettingsSync {
     private func start() {
         guard !isRunning, let folder = Self.folderURL else { return }
         isRunning = true
+        startedWith = settings.portable
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Turning sync on adopts what another Mac already put there; only an empty iCloud gets this
-        // Mac's settings. A file that is not readable yet is left alone: the watcher and the poll
-        // read it again once it lands.
+        // Mac's settings, and only once it has stayed empty for a while — `readRemote` writes them
+        // then. A file that is not readable yet is left alone: the watcher and the poll read it again
+        // once it lands.
         switch readRemote() {
-        case .absent:
-            writeNow()
+        case .absent, .pending:
+            break
         case .adopted, .unchanged:
             // Rewrite what was adopted in the current schema. Without this, a file from an older
             // DockPlus is re-adopted at every launch and its converted values stomp any change made
             // since — measured: an old "magnifiedSize" file reset the Amount slider on each launch.
             scheduleWrite()
-        case .pending:
-            break
         }
         watch(folder)
         let poll = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
@@ -330,6 +352,8 @@ final class SettingsSync {
         poll?.invalidate()
         poll = nil
         agreed = nil
+        startedWith = nil
+        absentSince = nil
         mayWrite = false
         lastError = nil
         lastModified = nil
@@ -393,6 +417,9 @@ final class SettingsSync {
 
     enum ReadResult { case adopted, unchanged, absent, pending }
 
+    /// How long the file must stay missing before a Mac that has never agreed on one writes its own.
+    private static let absentGrace: TimeInterval = 60
+
     /// Applies the file when it changed since last read.
     @discardableResult
     private func readRemote() -> ReadResult {
@@ -406,9 +433,23 @@ final class SettingsSync {
                 try? fm.startDownloadingUbiquitousItem(at: url)
                 return .pending
             }
+            // Missing at the first look is not yet missing: on a Mac new to iCloud Drive the folder's
+            // listing can arrive after DockPlus starts, and writing at once put this Mac's defaults
+            // over the real file. Until this Mac has agreed on a file, the absence has to last a
+            // minute of polls; once it has, a missing file is one deleted, and is written back at the
+            // next change, as ever.
+            if agreed == nil {
+                let since = absentSince ?? .now
+                absentSince = since
+                guard Date.now.timeIntervalSince(since) >= Self.absentGrace else { return .pending }
+                mayWrite = true
+                scheduleWrite()
+                return .absent
+            }
             mayWrite = true
             return .absent
         }
+        absentSince = nil
         // Evicted on macOS 26: the file keeps its name but is "dataless" (`ls -lO`), and reading
         // it downloads it synchronously — on the main thread, for as long as the network takes.
         // Read it on a background queue instead, which brings it down; the watcher sees it land.
@@ -429,10 +470,19 @@ final class SettingsSync {
         let modified = Self.modified(url)
         if let modified, modified == lastModified { return .unchanged }
         guard let data = try? Data(contentsOf: url) else { return .pending }
-        guard let remote = try? PortableSettings.decoded(from: data) else {
+        let remote: PortableSettings
+        do {
+            remote = try PortableSettings.decoded(from: data)
+        } catch DecodingError.typeMismatch(_, let context) where !context.codingPath.isEmpty {
+            // A JSON object whose setting has a type this DockPlus does not know: a newer DockPlus
+            // wrote it. Replaced as corrupt, it lost the newer Mac's settings to this one's, so this
+            // Mac neither adopts nor writes until it is updated.
+            lastError = "The settings in iCloud are from a newer DockPlus. Update DockPlus to keep syncing."
+            return .pending
+        } catch {
             // Corrupt, not merely not here yet: answering .pending forever meant mayWrite never
-            // came true and sync was silently dead on this Mac. The bytes are unrecoverable —
-            // every schema decodes from any JSON object — so this Mac's settings replace them
+            // came true and sync was silently dead on this Mac. The bytes are unrecoverable — not
+            // JSON, or not a JSON object, which every schema decodes from — so this Mac's settings replace them
             // (last writer wins, as ever). Not remembered as read: until the write lands, each
             // poll retries the replacement.
             NSLog("DockPlus: the iCloud settings file does not parse; replacing it")
@@ -442,11 +492,16 @@ final class SettingsSync {
             scheduleWrite()
             return .pending
         }
+        let local = settings.portable
+        let incoming = (agreed ?? startedWith).map { PortableSettings.merged(local: local, remote: remote, base: $0) }
+            ?? remote
         lastModified = modified
         agreed = remote
         mayWrite = true
         lastError = nil
-        settings.apply(remote)
+        settings.apply(incoming)
+        // This Mac's unsent edits, kept through the merge, go out on top of the file.
+        if incoming != remote { scheduleWrite() }
         return .adopted
     }
 
