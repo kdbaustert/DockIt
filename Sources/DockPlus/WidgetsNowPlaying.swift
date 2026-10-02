@@ -101,7 +101,11 @@ extension WidgetsModel {
             isPlaying = shown.parts[0] == "playing"
             trackTitle = shown.parts[1]
             trackArtist = shown.parts[2]
-            await loadArtwork(shown.parts.count > 3 ? shown.parts[3] : "")
+            // Not awaited: a download that stalls (URLSession waits 60 s on an idle connection)
+            // would hold the poll lock, and every notice meanwhile would only queue a re-poll.
+            // loadArtwork drops its own stale results, so a late finish cannot clobber a newer track.
+            let artworkURL = shown.parts.count > 3 ? shown.parts[3] : ""
+            Task { await self.loadArtwork(artworkURL) }
         }
     }
 
@@ -172,7 +176,12 @@ extension WidgetsModel {
     private func control(_ command: String) {
         // No player while one is refused: asking again is what notices the permission granted.
         guard let player else { return pollPlayer() }
-        let script = "tell application \"\(player)\" to \(command)"
+        // Only if it is still running: a bare `tell` launches a player that quit since the last poll.
+        let script = """
+            if application "\(player)" is running then
+                tell application "\(player)" to \(command)
+            end if
+            """
         Task {
             _ = await Self.runAppleScript(script)
             // Not left to the player's notice alone: the tile answers even if none comes.

@@ -327,8 +327,8 @@ enum WindowActions {
         guard let setFront, let postEvent, let getProcessForPID else { return false }
         var psn = ProcessSerialNumber()
         guard getProcessForPID(pid, &psn) == noErr else { return false }
-        // 0x2: "user generated" — anything else is not treated as a real activation.
-        guard setFront(&psn, windowID, 0x2) == noErr else { return false }
+        // 0x200 is `kCPSUserGenerated` — anything else is not treated as a real activation.
+        guard setFront(&psn, windowID, 0x200) == noErr else { return false }
         var bytes = [UInt8](repeating: 0, count: 0xf8)
         bytes[0x04] = 0xf8
         bytes[0x3a] = 0x10

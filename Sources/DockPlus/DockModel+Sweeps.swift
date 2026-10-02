@@ -22,6 +22,7 @@ extension DockModel {
                 minimizedWindows = []
                 rebuild()
             }
+            needsFullMinimizedSweep = true
             // Pruned only by a sweep, which no longer runs: without this the pictures stayed held.
             if !minimizedThumbs.isEmpty { minimizedThumbs = [:] }
             return
@@ -29,6 +30,8 @@ extension DockModel {
         // A sweep still waiting on a slow app: the next beat asks again.
         guard !isSweepingMinimized else { return }
         isSweepingMinimized = true
+        let pids = needsFullMinimizedSweep ? nil : pids
+        needsFullMinimizedSweep = false
         let me = ProcessInfo.processInfo.processIdentifier
         // Running order, so a partial pass keeps the tiles where they were.
         let order = NSWorkspace.shared.runningApplications

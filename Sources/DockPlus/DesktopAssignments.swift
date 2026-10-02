@@ -209,8 +209,11 @@ private enum Spaces {
     static func displays() -> [DesktopAssignments.Display] {
         SkyLight.managedDisplays().map { display in
             let spaces = display["Spaces"] as? [[String: Any]] ?? []
+            // A full-screen app in front makes its own Space current, which is not a Desktop and
+            // would be offered as one; no current Desktop means none is offered.
+            let current = display["Current Space"] as? [String: Any]
             return DesktopAssignments.Display(
-                current: (display["Current Space"] as? [String: Any])?["uuid"] as? String,
+                current: (current?["type"] as? Int) == 0 ? current?["uuid"] as? String : nil,
                 desktops: spaces.filter { ($0["type"] as? Int) == 0 }.compactMap { $0["uuid"] as? String })
         }
     }

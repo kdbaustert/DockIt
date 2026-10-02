@@ -161,7 +161,10 @@ final class DockSettings {
     var hidesSystemDock: Bool {
         didSet {
             store.set(hidesSystemDock, forKey: "hidesSystemDock")
-            hidesSystemDock ? SystemDock.hide() : SystemDock.restore()
+            // Only the app's own settings drive the real Dock: a test's throwaway instance would
+            // otherwise run `defaults write` and `killall Dock` on the machine it runs on.
+            guard self === DockSettings.shared else { return }
+            hidesSystemDock ? SystemDock.settingChanged() : SystemDock.restore()
         }
     }
     /// Hidden, the macOS Dock still bounces an app that asks for attention up from the screen edge,
@@ -171,7 +174,7 @@ final class DockSettings {
     var systemDockBouncesForAttention: Bool {
         didSet {
             store.set(systemDockBouncesForAttention, forKey: "systemDockBouncesForAttention")
-            if hidesSystemDock { SystemDock.hide() }
+            if self === DockSettings.shared, hidesSystemDock { SystemDock.settingChanged() }
         }
     }
     /// Pinned app paths in dock order. Finder is not in here: like the real Dock, it is always first.

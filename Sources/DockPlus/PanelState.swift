@@ -9,6 +9,9 @@ import Observation
 final class PanelState {
     /// Along-axis pointer position within this panel's strip, while it is over (or approaching) the bar.
     var pointer: CGFloat?
+    /// Whether the pointer is on the bar itself, as against approaching it with `pointer` set only
+    /// to ease the magnification in. The hover highlight and name label follow this, not `pointer`.
+    var isOverBar = false
     var stripLength: CGFloat = 0
     var isHidden = false
     /// Scales the magnification growth, 0...1. Stays 1 except while "magnify as the pointer

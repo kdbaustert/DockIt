@@ -150,6 +150,13 @@ struct GeneralPane: View {
         .task {
             while !Task.isCancelled {
                 permissions = PermissionsState()
+                // Removed in System Settings ▸ Login Items while this is open, the switch would stay
+                // on and its next click would unregister an item that is gone.
+                let enabled = SMAppService.mainApp.status == .enabled
+                if enabled != opensAtLogin {
+                    isResettingLogin = true
+                    opensAtLogin = enabled
+                }
                 try? await Task.sleep(for: .seconds(2))
             }
         }

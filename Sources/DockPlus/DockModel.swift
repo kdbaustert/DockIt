@@ -161,6 +161,9 @@ final class DockModel {
     /// activation sweep must still ask about.
     @ObservationIgnored private var lastFrontmostPID: pid_t?
     @ObservationIgnored var isSweepingMinimized = false
+    /// Set while the minimized-window sweep is ineligible (setting off, no Accessibility), so the
+    /// first sweep after it passes again asks every app instead of waiting for the 30 s full one.
+    @ObservationIgnored var needsFullMinimizedSweep = false
     @ObservationIgnored var isSweepingBadges = false
     @ObservationIgnored private var maintenanceTimer: Timer?
     @ObservationIgnored private var isRebuildPending = false
@@ -213,6 +216,9 @@ final class DockModel {
         // The baseline right away, not at the first beat: an icon updated in the first six seconds
         // would otherwise be compared against a date that was never taken.
         refreshIcons()
+        // Likewise, rather than leaving tiles and badges missing until the first full beat.
+        refreshMinimizedWindows()
+        refreshBadges()
         trackItems()
         // Minimized windows: on every app switch, ask the app just left — the one that may have
         // minimized its last window on the way out — and the one arrived; on the timer below, the
@@ -300,6 +306,11 @@ final class DockModel {
                  settings.widgetOrder,
                  settings.edge, settings.showsRecentApps)
         } onChange: { [weak self] in
+            // Switching recents off forgets the list: the settings footer says it is kept only
+            // while the switch is on, and a stale one came back when it was turned on again.
+            if let settings = self?.settings, !settings.showsRecentApps, !settings.recentApps.isEmpty {
+                settings.recentApps = []
+            }
             self?.rebuild()
         }
     }
@@ -859,7 +870,9 @@ final class DockModel {
         let id = Self.key(url)
         // The running-apps tile's apps had tiles too, just gathered into one.
         let tiles = items.flatMap { $0.kind == .runningApps ? $0.apps : [$0] }
-        guard id != Self.finderID, tiles.contains(where: { $0.id == id && $0.kind == .app && $0.isRunning })
+        // Not a pinned one: `items()` never lists it as recent, so it would only take a slot.
+        guard id != Self.finderID,
+              tiles.contains(where: { $0.id == id && $0.kind == .app && $0.isRunning && !$0.isPinned })
         else { return }
         let updated = Self.recordingRecent(url.path, in: settings.recentApps)
         if updated != settings.recentApps { settings.recentApps = updated }

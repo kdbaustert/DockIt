@@ -209,12 +209,15 @@ final class DockController {
         guard let screen = self.screen else { return }
         let metrics = model.metrics
         let depth = metrics.magnifiedSize + 2 * metrics.padding
+        // A launch bounce lifts the icon half its size above its resting place, which at large icon
+        // sizes outgrows the room the name label needs.
+        let extra = max(Self.labelRoom, metrics.iconSize * 0.5 + metrics.padding)
         let full = screen.frame
         // Side docks stop at the menu bar; the bottom dock owns the whole width.
         let top = screen.visibleFrame.maxY
         let frame = switch settings.edge {
         case .bottom:
-            NSRect(x: full.minX, y: full.minY, width: full.width, height: depth + Self.labelRoom)
+            NSRect(x: full.minX, y: full.minY, width: full.width, height: depth + extra)
         case .left:
             NSRect(x: full.minX, y: full.minY, width: depth + Self.sideLabelRoom, height: top - full.minY)
         case .right:
@@ -325,6 +328,7 @@ final class DockController {
         let approaching = settings.magnifyOnApproach && settings.magnifies && onEdge && !state.isHidden
             && alongBar && !overBar && !inGrid && across <= reach * 3
         let pointer = (overBar || approaching) ? along : nil
+        if state.isOverBar != overBar { state.isOverBar = overBar }
         state.gain = overBar || !approaching ? 1 : max(0, 1 - (across - reach) / (reach * 2))
         if pointer != state.pointer {
             if pointer != nil, state.pointer == nil { model.refreshTrash() }

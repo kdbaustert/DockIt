@@ -32,17 +32,14 @@ enum SystemDock {
         // Only the first time: after a crash or a kill the Dock is still hidden, and capturing it
         // again would overwrite the originals with DockPlus's own values.
         if store.dictionary(forKey: savedKey) == nil {
-            let dock = UserDefaults(suiteName: domain)
             var saved: [String: Any] = [:]
-            if let value = dock?.object(forKey: "autohide") { saved["autohide"] = value }
-            if let value = dock?.object(forKey: "autohide-delay") { saved["autohide-delay"] = value }
+            if let value = userValue("autohide") { saved["autohide"] = value }
+            if let value = userValue("autohide-delay") { saved["autohide-delay"] = value }
             store.set(saved, forKey: savedKey)
         }
         if store.dictionary(forKey: savedBouncingKey) == nil {
             var saved: [String: Any] = [:]
-            if let value = UserDefaults(suiteName: domain)?.object(forKey: "no-bouncing") {
-                saved["no-bouncing"] = value
-            }
+            if let value = userValue("no-bouncing") { saved["no-bouncing"] = value }
             store.set(saved, forKey: savedBouncingKey)
         }
         // Read fresh through CFPreferences: this runs every few seconds, and a `UserDefaults` for
@@ -81,6 +78,14 @@ enum SystemDock {
         run("/usr/bin/killall", ["Dock"])
     }
 
+    /// A change the user made to a setting that decides what `hide()` wants. The mismatch it causes
+    /// is not a write that failed to stick, so it starts the count over: four flips inside the
+    /// watchdog's window would otherwise use up `maxAttempts` and silence the watchdog for good.
+    static func settingChanged() {
+        failedAttempts = 0
+        hide()
+    }
+
     static func restore() {
         // Hiding again after a restore is a fresh start, not a fourth try: three failures used to
         // stop every later hide until a relaunch.
@@ -110,7 +115,10 @@ enum SystemDock {
     /// restoring only a Bool deleted it, and the user's own setting was lost with the saved copy.
     /// A key that was absent when captured is deleted.
     private static func put(_ key: String, _ value: Any?) -> Bool {
-        switch value {
+        // A forced key is no one's to restore, and writing it would leave the profile's value in the
+        // user's own domain to outlive the profile.
+        if CFPreferencesAppValueIsForced(key as CFString, domain as CFString) { return true }
+        return switch value {
         case let string as String:
             defaults(["write", domain, key, "-string", string])
         case let number as NSNumber where CFGetTypeID(number) == CFBooleanGetTypeID():
@@ -125,9 +133,18 @@ enum SystemDock {
     /// `defaults delete` exits non-zero for a key that is already absent, which is the outcome
     /// wanted — so only a key that is there counts against the restore.
     private static func delete(_ key: String) -> Bool {
-        CFPreferencesAppSynchronize(domain as CFString)
-        guard CFPreferencesCopyAppValue(key as CFString, domain as CFString) != nil else { return true }
+        guard !CFPreferencesAppValueIsForced(key as CFString, domain as CFString),
+              userValue(key) != nil
+        else { return true }
         return defaults(["delete", domain, key])
+    }
+
+    /// The user's own value for a Dock key, which is not what `UserDefaults` or `CopyAppValue` answer
+    /// when a configuration profile forces the key: those return the forced value.
+    private static func userValue(_ key: String) -> Any? {
+        CFPreferencesAppSynchronize(domain as CFString)
+        return CFPreferencesCopyValue(
+            key as CFString, domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
     }
 
     /// File paths from one of the Dock's tile lists — `persistent-apps` (the pinned apps) or

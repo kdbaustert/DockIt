@@ -14,6 +14,7 @@ extension WidgetsModel {
             weatherTemperature = nil
             weatherPlace = ""
             weatherHighLow = ""
+            weatherSymbol = "cloud.fill"
             weatherReadingKey = nil
             return
         }
@@ -32,7 +33,7 @@ extension WidgetsModel {
             + "|\(settings.weatherLatitude),\(settings.weatherLongitude)"
     }
 
-    private func refreshWeather() {
+    private func refreshWeather(isRetry: Bool = false) {
         let place = settings.weatherLocation
         let fahrenheit = settings.weatherFahrenheit
         let key = weatherKey
@@ -45,7 +46,7 @@ extension WidgetsModel {
         weatherTask = Task { [weak self] in
             // Not `??`: its right side is an autoclosure, which cannot await.
             let located: Located?
-            var mayRetry = true
+            var mayRetry = !isRetry
             if let pinned {
                 located = pinned
             } else {
@@ -76,9 +77,11 @@ extension WidgetsModel {
         }
     }
 
-    /// A reading for another key — place, unit or coordinates — is wrong, not stale, so it goes;
-    /// "--°" is honest. Then one retry a minute on: a transient failure at launch, or right after
-    /// a wake before the network is back, otherwise leaves the tile a whole cycle. It fires only if
+    /// A reading for another key — place, unit or coordinates — is wrong, not stale, so it goes,
+    /// icon included; "--°" is honest. Then one retry a minute on: a transient failure at launch, or right after
+    /// a wake before the network is back, otherwise leaves the tile a whole cycle. Once: the retry
+    /// itself schedules none (`isRetry`), so a network that stays down is left to the quarter-hour
+    /// timer instead of a request a minute all day. It fires only if
     /// nothing has changed or succeeded since — gated on the success count, not on an empty tile:
     /// a kept stale reading is exactly the case that must still retry. Not for a place the geocoder
     /// knows no match for (`mayRetry: false`) — retrying a typo every minute hammered the geocoder
@@ -89,6 +92,7 @@ extension WidgetsModel {
             weatherTemperature = nil
             weatherPlace = ""
             weatherHighLow = ""
+            weatherSymbol = "cloud.fill"
         }
         weatherRetry?.cancel()
         guard mayRetry else {
@@ -101,7 +105,7 @@ extension WidgetsModel {
             guard let self, settings.showsWeather, weatherKey == key, weatherSuccesses == successesAtFailure
             else { return }
             weatherRetry = nil
-            refreshWeather()
+            refreshWeather(isRetry: true)
         }
     }
 

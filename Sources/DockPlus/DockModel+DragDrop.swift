@@ -185,7 +185,12 @@ extension DockModel {
         // Before the name check: a gallery widget dropped on itself is still a widget to add.
         WidgetsModel.shared.add(name)
         guard name != targetName else { return }
-        settings.widgetOrder = Self.reordered(settings.widgetOrder, moving: name, before: targetName)
+        // The bar shows the order with any missing widget appended, so reorder that: against the raw
+        // list a drop before a missing widget found no target and went to the end. Names this build
+        // does not know stay, as a newer build's synced order may carry them.
+        let order = settings.widgetOrder
+        let shown = order + canonicalWidgetOrder.filter { !order.contains($0) }
+        settings.widgetOrder = Self.reordered(shown, moving: name, before: targetName)
     }
 
     /// Pins the app at `path` immediately before `target`, or at the end of the pinned apps. Moving an
@@ -275,6 +280,9 @@ extension DockModel {
             endDrag()
             return true
         }
+        // A bar drag let go on the Trash takes the item off the bar, as the macOS Dock does; the gap
+        // is pinned to the end of the section over it, so committing would only move the item.
+        if target?.kind == .trash, drag != nil, endDragRemoving() { return true }
         if commitDrag() { return true }
         let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         if files.isEmpty {

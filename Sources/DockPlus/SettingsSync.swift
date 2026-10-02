@@ -82,6 +82,15 @@ struct PortableSettings: Codable, Equatable {
         return !context.codingPath.isEmpty
     }
 
+    /// Whether the file holds a value this build cannot represent: an edge it has no case for, or a
+    /// number outside its sliders' ranges. `apply` ignores the first and clamps the second, so the
+    /// Mac would then differ from the file and write its degraded copy over the newer Mac's. Only a
+    /// newer DockPlus produces either, so it is held like a type change; see `isFromNewerDockPlus`.
+    var isBeyondThisBuild: Bool {
+        if let edge, DockEdge(rawValue: edge) == nil { return true }
+        return clamped() != self
+    }
+
     /// The settings once `remote` lands on a Mac whose own are `local`, both descended from `base`:
     /// what the other Mac changed comes in, and what this one changed and has not written yet stays.
     /// Applying the whole file undid an edit made in the second before its write — the slider jumped
@@ -283,7 +292,27 @@ final class SettingsSync {
     @ObservationIgnored private var isRunning = false
     /// The settings the file and this Mac last agreed on. A change that matches it — the echo of
     /// applying the file, or a file this Mac wrote itself — is not sent back round.
-    @ObservationIgnored private var agreed: PortableSettings?
+    ///
+    /// Kept in this Mac's defaults too, not in the shared file: held only in memory, it was gone at
+    /// the next launch, the merge base fell back to the settings as sync started, and the file won
+    /// every field it differed on — silently undoing any edit that had not reached iCloud before
+    /// the last exit.
+    @ObservationIgnored private var agreed: PortableSettings? {
+        didSet { Self.storeAgreed(agreed) }
+    }
+    private static let agreedKey = "syncAgreedSettings"
+
+    private static func storeAgreed(_ settings: PortableSettings?) {
+        guard let data = try? settings?.encoded() else {
+            UserDefaults.standard.removeObject(forKey: agreedKey)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: agreedKey)
+    }
+
+    private static func loadAgreed() -> PortableSettings? {
+        UserDefaults.standard.data(forKey: agreedKey).flatMap { try? PortableSettings.decoded(from: $0) }
+    }
     /// This Mac's settings as sync started: what a file landing before any agreement is merged
     /// against, so an edit made while the first read was pending survives it.
     @ObservationIgnored private var startedWith: PortableSettings?
@@ -327,6 +356,7 @@ final class SettingsSync {
         guard !isRunning, let folder = Self.folderURL else { return }
         isRunning = true
         startedWith = settings.portable
+        agreed = Self.loadAgreed()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Turning sync on adopts what another Mac already put there; only an empty iCloud gets this
         // Mac's settings, and only once it has stayed empty for a while — `readRemote` writes them
@@ -446,7 +476,9 @@ final class SettingsSync {
             // over the real file. Until this Mac has agreed on a file, the absence has to last a
             // minute of polls; once it has, a missing file is one deleted, and is written back at the
             // next change, as ever.
-            if agreed == nil {
+            // A remembered agreement from an earlier launch does not count: the listing can still be
+            // late, so `mayWrite` stands in for "agreed during this run".
+            if agreed == nil || !mayWrite {
                 let since = absentSince ?? .now
                 absentSince = since
                 guard Date.now.timeIntervalSince(since) >= Self.absentGrace else { return .pending }
@@ -482,16 +514,7 @@ final class SettingsSync {
         do {
             remote = try PortableSettings.decoded(from: data)
         } catch let error where PortableSettings.isFromNewerDockPlus(error) {
-            // A newer DockPlus wrote it. Replaced as corrupt, it lost the newer Mac's settings to this
-            // one's, so this Mac neither adopts nor writes until it is updated. Writing is switched
-            // off, not merely skipped: with it left on, a write already queued or the next change here
-            // went out over the newer file, and that write's success cleared this message. A later
-            // read of a file this DockPlus understands, or of none, switches it back on.
-            lastError = "The settings in iCloud are from a newer DockPlus. Update DockPlus to keep syncing."
-            mayWrite = false
-            pendingWrite?.cancel()
-            pendingWrite = nil
-            return .pending
+            return holdForNewerDockPlus()
         } catch {
             // Corrupt, not merely not here yet: answering .pending forever meant mayWrite never
             // came true and sync was silently dead on this Mac. The bytes are unrecoverable — not
@@ -505,6 +528,7 @@ final class SettingsSync {
             scheduleWrite()
             return .pending
         }
+        if remote.isBeyondThisBuild { return holdForNewerDockPlus() }
         let local = settings.portable
         let incoming = (agreed ?? startedWith).map { PortableSettings.merged(local: local, remote: remote, base: $0) }
             ?? remote
@@ -516,6 +540,19 @@ final class SettingsSync {
         // This Mac's unsent edits, kept through the merge, go out on top of the file.
         if incoming != remote { scheduleWrite() }
         return .adopted
+    }
+
+    /// A newer DockPlus wrote the file. Replaced as corrupt, it lost the newer Mac's settings to this
+    /// one's, so this Mac neither adopts nor writes until it is updated. Writing is switched
+    /// off, not merely skipped: with it left on, a write already queued or the next change here
+    /// went out over the newer file, and that write's success cleared this message. A later
+    /// read of a file this DockPlus understands, or of none, switches it back on.
+    private func holdForNewerDockPlus() -> ReadResult {
+        lastError = "The settings in iCloud are from a newer DockPlus. Update DockPlus to keep syncing."
+        mayWrite = false
+        pendingWrite?.cancel()
+        pendingWrite = nil
+        return .pending
     }
 
     private static func modified(_ url: URL) -> Date? {

@@ -34,4 +34,15 @@ final class SettingsSyncDecodeTests: XCTestCase {
         let error = try XCTUnwrap(decodingError("not json"))
         XCTAssertFalse(PortableSettings.isFromNewerDockPlus(error))
     }
+
+    /// A value this build cannot hold would be dropped or clamped by `apply`, then written back over
+    /// the newer Mac's, so the file is held like a type change.
+    func testValuesBeyondThisBuildAreHeld() throws {
+        let unknownEdge = try PortableSettings.decoded(from: Data(#"{"edge":"top"}"#.utf8))
+        XCTAssertTrue(unknownEdge.isBeyondThisBuild)
+        let wide = try PortableSettings.decoded(from: Data(#"{"iconSize":1e9}"#.utf8))
+        XCTAssertTrue(wide.isBeyondThisBuild)
+        let fine = try PortableSettings.decoded(from: Data(#"{"edge":"left","iconSize":48}"#.utf8))
+        XCTAssertFalse(fine.isBeyondThisBuild)
+    }
 }

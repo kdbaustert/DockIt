@@ -81,6 +81,14 @@ final class BatteryCalendarWidgetTests: XCTestCase {
         XCTAssertEqual(WidgetsModel.calendarTimeText(for: entry("A", -5, 25), at: at(0), time: time), "Now, until T25")
     }
 
+    /// A block ending days from now must say which day, or it reads as ending today.
+    func testTimeTextNamesTheDayOfAnEventEndingAfterToday() {
+        let time: (Date) -> String = { "T\(Int($0.timeIntervalSince(self.t0) / 60))" }
+        let text = WidgetsModel.calendarTimeText(for: entry("A", -5, 3 * 24 * 60), at: at(0), time: time)
+        XCTAssertTrue(text.hasPrefix("Now, until "))
+        XCTAssertTrue(text.hasSuffix(" T4320"), text)
+    }
+
     /// The one timer waits for the soonest start or end still ahead, else the day's end.
     func testNextBoundaryIsTheSoonestStartOrEndAhead() {
         let dayEnd = at(600)

@@ -9,7 +9,9 @@ struct DockView: View {
         let layout = model.layout(for: state)
         let metrics = layout.metrics
         // No highlight or name while an icon is carried: the pointer is over its gap.
-        let hovered = model.drag == nil ? state.pointer.flatMap(layout.index(at:)) : nil
+        // Nor while the pointer is only approaching: magnification eases in then, but the controller
+        // treats nothing as hovered until the pointer is on the bar.
+        let hovered = model.drag == nil && state.isOverBar ? state.pointer.flatMap(layout.index(at:)) : nil
         let edge = settings.edge
         let horizontal = edge == .bottom
         let row = horizontal
@@ -71,11 +73,15 @@ struct DockView: View {
                             RunningAppsTile(apps: item.apps, width: size, height: metrics.iconSize, model: model)
                                 .onDrop(of: DockModel.dropTypes, isTargeted: nil) { model.handleDrop($0, onto: item) }
                         case .app, .folder, .trash:
-                            DockIcon(item: item, size: size, isHovered: index == hovered, edge: edge, model: model)
+                            DockIcon(
+                                item: item, size: size, isHovered: index == hovered, edge: edge,
+                                isDockHidden: state.isHidden, bounceHeight: metrics.iconSize * 0.5,
+                                model: model)
                         }
                     }
                     // The carried icon's slot is its gap: there, holding the space, but empty.
-                    .opacity(model.drag?.id == item.id ? 0 : 1)
+                    // An Esc-cancelled drag has already put the icon back, so only a live one hides it.
+                    .opacity(model.drag.map { $0.id == item.id && !$0.cancelled } == true ? 0 : 1)
                 }
             }
             .padding(edge.alongStart, layout.start + metrics.padding)
@@ -91,10 +97,18 @@ private struct DockIcon: View {
     let size: CGFloat
     let isHovered: Bool
     let edge: DockEdge
+    let isDockHidden: Bool
+    /// Half the fitted resting icon size, the same size the hidden offset is measured from: the
+    /// unfitted setting bounced a crowded, shrunken bar's icons out over the screen edge.
+    let bounceHeight: CGFloat
     let model: DockModel
     @State private var isTargeted = false
 
-    private var isBouncing: Bool { model.settings.bouncesOnLaunch && model.launching.contains(item.id) }
+    /// Never while the dock is hidden: it sits just past the screen edge, and a lift would show the
+    /// icon above it on every launch anywhere.
+    private var isBouncing: Bool {
+        model.settings.bouncesOnLaunch && !isDockHidden && model.launching.contains(item.id)
+    }
 
     var body: some View {
         Image(nsImage: model.icon(for: item))
@@ -112,7 +126,7 @@ private struct DockIcon: View {
             .keyframeAnimator(initialValue: CGFloat(0), repeating: isBouncing) {
                 [edge, isBouncing] icon, lift in
                 icon.offset(edge.hiddenOffset(isBouncing ? -lift : 0))
-            } keyframes: { [bounce = model.metrics.iconSize * 0.5] _ in
+            } keyframes: { [bounce = bounceHeight] _ in
                 // A thrown ball, as the macOS Dock's launch bounce moves: decelerating to the top,
                 // accelerating back down, and straight into the next with no rest between. Height
                 // from the resting size, so a magnified icon does not bounce higher.

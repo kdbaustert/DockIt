@@ -127,12 +127,18 @@ extension WidgetsModel {
         return entries.filter { $0.start > now }.min { $0.start < $1.start }
     }
 
-    /// "10:00 AM" for an event still to come; "Now, until 10:30 AM" for one under way. Pure, for
-    /// the tests: the formatter comes in as `time`.
+    /// "10:00 AM" for an event still to come; "Now, until 10:30 AM" for one under way. One that runs
+    /// past midnight names the day it ends ("Now, until Wed 5:00 PM"), or a Monday-to-Wednesday
+    /// block reads as ending today. Ending at midnight itself is still today's. Pure, for the
+    /// tests: the formatter comes in as `time`.
     nonisolated static func calendarTimeText(
         for entry: CalendarEntry, at now: Date, time: (Date) -> String
     ) -> String {
-        entry.start <= now ? "Now, until \(time(entry.end))" : time(entry.start)
+        guard entry.start <= now else { return time(entry.start) }
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+        guard let tomorrow, entry.end > tomorrow else { return "Now, until \(time(entry.end))" }
+        return "Now, until \(entry.end.formatted(.dateTime.weekday(.abbreviated))) \(time(entry.end))"
     }
 
     /// The next moment the tile's answer can change: an event starting or ending, or the day
