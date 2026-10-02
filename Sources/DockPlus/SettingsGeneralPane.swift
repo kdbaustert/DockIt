@@ -62,6 +62,11 @@ struct GeneralPane: View {
                     title: "Hide the macOS Dock",
                     subtitle: "It keeps running for the app switcher, Mission Control and Spaces — just out of sight.",
                     isOn: $settings.hidesSystemDock)
+                SettingsToggle(
+                    title: "Let apps bounce for attention",
+                    subtitle: "An app that needs you pops its icon up from the screen edge, beneath DockPlus.",
+                    isOn: $settings.systemDockBouncesForAttention)
+                    .disabled(!settings.hidesSystemDock)
             }
             SettingsSection(
                 title: "Display", anchor: SettingsAnchor.display,

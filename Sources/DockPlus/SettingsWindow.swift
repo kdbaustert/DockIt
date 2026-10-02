@@ -112,6 +112,8 @@ private enum SettingsIndex {
              ["login", "launch", "boot", "autostart", "startup"]),
         item("hideSystemDock", .general, SettingsAnchor.macOSDock, "macOS Dock", "Hide the macOS Dock",
              ["system dock", "apple dock", "restore", "replace"]),
+        item("systemDockBounce", .general, SettingsAnchor.macOSDock, "macOS Dock", "Let apps bounce for attention",
+             ["bounce", "attention", "notify", "alert", "jump", "system dock"]),
         item("permissions", .general, SettingsAnchor.permissions, "Permissions", "Screen Recording and Accessibility",
              ["permission", "screen recording", "accessibility", "granted", "privacy"]),
         item("betaUpdates", .general, SettingsAnchor.updates, "Updates", "Receive beta updates",

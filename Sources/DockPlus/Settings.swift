@@ -164,6 +164,16 @@ final class DockSettings {
             hidesSystemDock ? SystemDock.hide() : SystemDock.restore()
         }
     }
+    /// Hidden, the macOS Dock still bounces an app that asks for attention up from the screen edge,
+    /// beneath the bar. Off sets its `no-bouncing`, which stops that bounce. DockPlus cannot bounce
+    /// the icon itself instead: the hidden Dock's tile rising (its AX frame) is the only sign of the
+    /// request, and `no-bouncing` stops that too — measured on 27.2. Per Mac, like the switch above.
+    var systemDockBouncesForAttention: Bool {
+        didSet {
+            store.set(systemDockBouncesForAttention, forKey: "systemDockBouncesForAttention")
+            if hidesSystemDock { SystemDock.hide() }
+        }
+    }
     /// Pinned app paths in dock order. Finder is not in here: like the real Dock, it is always first.
     var pinnedApps: [String] { didSet { store.set(pinnedApps, forKey: "pinnedApps") } }
     /// Folder paths shown as stacks beside the Trash.
@@ -236,6 +246,7 @@ final class DockSettings {
         "specificDisplay": "",
         "previewsShowOnlyThisDisplay": false,
         "hidesSystemDock": true,
+        "systemDockBouncesForAttention": false,
         "stackSorts": [String: String](),
         "stackDisplays": [String: String](),
         "showsRecentApps": false,
@@ -324,6 +335,7 @@ final class DockSettings {
         specificDisplay = store.string(forKey: "specificDisplay") ?? ""
         previewsShowOnlyThisDisplay = store.bool(forKey: "previewsShowOnlyThisDisplay")
         hidesSystemDock = store.bool(forKey: "hidesSystemDock")
+        systemDockBouncesForAttention = store.bool(forKey: "systemDockBouncesForAttention")
         hiddenApps = store.stringArray(forKey: "hiddenApps") ?? []
         showsRecentApps = store.bool(forKey: "showsRecentApps")
         recentApps = store.stringArray(forKey: "recentApps") ?? []

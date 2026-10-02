@@ -87,6 +87,8 @@ final class PortableSettingsTests: XCTestCase {
     private static let perMacKeys: Set<String> = [
         // Hiding the macOS Dock restarts it — not something one Mac should do to another.
         "hidesSystemDock",
+        // Writes the macOS Dock's `no-bouncing` and restarts it, the same as the switch above.
+        "systemDockBouncesForAttention",
         // The sync switch itself.
         "syncsWithICloud",
         // Display-shaped: which screen, and that screen's UUID, mean nothing on another Mac.

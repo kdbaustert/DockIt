@@ -2,13 +2,20 @@ import Foundation
 
 /// The macOS Dock, which DockPlus hides rather than kills: the same process draws the app switcher,
 /// Mission Control, Spaces and the wallpaper, so it has to stay running. Auto-hide with a delay no pointer
-/// will ever wait out keeps it alive and out of sight.
+/// will ever wait out keeps it alive and out of sight — all but its attention bounces, which come up
+/// from the screen edge regardless, and which `no-bouncing` stops unless
+/// `DockSettings.systemDockBouncesForAttention` wants them.
 @MainActor
 enum SystemDock {
     private static let domain = "com.apple.dock"
     /// The user's own `autohide` / `autohide-delay`, captured before the first change. A key absent
     /// from the dictionary was absent from the Dock's preferences, and is deleted on restore.
     private static let savedKey = "savedSystemDock"
+    /// The user's own `no-bouncing`, captured the same way. A key of its own because installs that
+    /// hid the Dock before DockPlus touched `no-bouncing` already hold a `savedKey` without it, and
+    /// there a missing key reads as "was absent": the restore would delete a `no-bouncing` the user
+    /// had set themselves.
+    private static let savedBouncingKey = "savedSystemDockBouncing"
     private static let hiddenDelay = 1000.0
     /// `restore()` waits on `defaults` and `killall`, and `waitUntilExit()` spins the main run loop
     /// while it does — so the watchdog or the Settings toggle can call `hide()` in the middle of a
@@ -31,12 +38,27 @@ enum SystemDock {
             if let value = dock?.object(forKey: "autohide-delay") { saved["autohide-delay"] = value }
             store.set(saved, forKey: savedKey)
         }
+        if store.dictionary(forKey: savedBouncingKey) == nil {
+            var saved: [String: Any] = [:]
+            if let value = UserDefaults(suiteName: domain)?.object(forKey: "no-bouncing") {
+                saved["no-bouncing"] = value
+            }
+            store.set(saved, forKey: savedBouncingKey)
+        }
         // Read fresh through CFPreferences: this runs every few seconds, and a `UserDefaults` for
         // another app's domain can go on answering from its cache after that app's prefs changed.
         CFPreferencesAppSynchronize(domain as CFString)
         let autohide = CFPreferencesCopyAppValue("autohide" as CFString, domain as CFString) as? Bool
         let delay = CFPreferencesCopyAppValue("autohide-delay" as CFString, domain as CFString) as? Double
-        if autohide == true, delay == hiddenDelay {
+        // Allowed to bounce, the Dock gets the user's own `no-bouncing` back, absent or not.
+        let wantedNoBouncing: NSObject? = DockSettings.shared.systemDockBouncesForAttention
+            ? store.dictionary(forKey: savedBouncingKey)?["no-bouncing"] as? NSObject
+            : true as NSNumber
+        // A forced `no-bouncing` is left as it is, rather than failing the whole hide.
+        let noBouncingIsRight = CFPreferencesAppValueIsForced("no-bouncing" as CFString, domain as CFString)
+            || (CFPreferencesCopyAppValue("no-bouncing" as CFString, domain as CFString) as? NSObject)
+                == wantedNoBouncing
+        if autohide == true, delay == hiddenDelay, noBouncingIsRight {
             failedAttempts = 0
             return
         }
@@ -55,6 +77,7 @@ enum SystemDock {
         failedAttempts += 1
         defaults(["write", domain, "autohide", "-bool", "true"])
         defaults(["write", domain, "autohide-delay", "-float", String(hiddenDelay)])
+        if !noBouncingIsRight { _ = put("no-bouncing", wantedNoBouncing) }
         run("/usr/bin/killall", ["Dock"])
     }
 
@@ -63,15 +86,22 @@ enum SystemDock {
         // stop every later hide until a relaunch.
         failedAttempts = 0
         let store = UserDefaults.standard
-        guard let saved = store.dictionary(forKey: savedKey) else { return }
+        let saved = store.dictionary(forKey: savedKey)
+        let savedBouncing = store.dictionary(forKey: savedBouncingKey)
+        guard saved != nil || savedBouncing != nil else { return }
         isRestoring = true
         defer { isRestoring = false }
-        var succeeded = true
-        for key in ["autohide", "autohide-delay"] {
-            succeeded = put(key, saved[key]) && succeeded
+        if let saved {
+            var succeeded = true
+            for key in ["autohide", "autohide-delay"] {
+                succeeded = put(key, saved[key]) && succeeded
+            }
+            // Only once the Dock really has the originals back; otherwise they are the only copy left.
+            if succeeded { store.removeObject(forKey: savedKey) }
         }
-        // Only once the Dock really has the originals back; otherwise they are the only copy left.
-        if succeeded { store.removeObject(forKey: savedKey) }
+        if let savedBouncing, put("no-bouncing", savedBouncing["no-bouncing"]) {
+            store.removeObject(forKey: savedBouncingKey)
+        }
         run("/usr/bin/killall", ["Dock"])
     }
 
